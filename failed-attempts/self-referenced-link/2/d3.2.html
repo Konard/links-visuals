@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>D3 Link with Gender Markers</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+    svg {
+      display: block;
+    }
+    #fullscreen-btn {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      z-index: 1000;
+      padding: 10px 15px;
+      background: rgba(255, 255, 255, 0.8);
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <button id="fullscreen-btn">Full Screen</button>
+  <script type="module">
+    const { use } = await import("https://esm.sh/use-m");
+    (async () => {
+      // Import D3.js using use‑m
+      const d3 = await use('d3');
+      
+      // Define padding and canvas dimensions
+      const padding = 50;
+      let width = window.innerWidth;
+      let height = window.innerHeight;
+      
+      // Create a full-page SVG canvas
+      const svg = d3.select("body")
+        .append("svg")
+        .attr("width", width)
+        .attr("height", height);
+      
+      // Define SVG markers in the defs section
+      const defs = svg.append("defs");
+      
+      // Female marker (drawn at the start of the link)
+      // This marker shows a circle with a cross underneath (female symbol)
+      defs.append("marker")
+          .attr("id", "female-marker")
+          .attr("viewBox", "0 0 20 20")
+          // Set the reference point to the top center of the marker shape
+          .attr("refX", 10)
+          .attr("refY", 4)
+          .attr("markerWidth", 10)
+          .attr("markerHeight", 10)
+          .attr("orient", "auto")
+        .append("g")
+          .call(g => {
+            g.append("circle")
+             .attr("cx", 10)
+             .attr("cy", 7)
+             .attr("r", 3)
+             .attr("fill", "black");
+            g.append("line")
+             .attr("x1", 10)
+             .attr("y1", 10)
+             .attr("x2", 10)
+             .attr("y2", 14)
+             .attr("stroke", "black")
+             .attr("stroke-width", 2);
+            g.append("line")
+             .attr("x1", 7)
+             .attr("y1", 14)
+             .attr("x2", 13)
+             .attr("y2", 14)
+             .attr("stroke", "black")
+             .attr("stroke-width", 2);
+          });
+      
+      // Male marker (drawn at the end of the link)
+      // This marker shows a circle with an attached arrow (male symbol)
+      defs.append("marker")
+          .attr("id", "male-marker")
+          .attr("viewBox", "0 0 20 20")
+          // Set the reference point to the left side of the marker shape
+          .attr("refX", 3)
+          .attr("refY", 10)
+          .attr("markerWidth", 10)
+          .attr("markerHeight", 10)
+          .attr("orient", "auto")
+        .append("g")
+          .call(g => {
+            g.append("circle")
+             .attr("cx", 6)
+             .attr("cy", 10)
+             .attr("r", 3)
+             .attr("fill", "black");
+            g.append("line")
+             .attr("x1", 9)
+             .attr("y1", 10)
+             .attr("x2", 16)
+             .attr("y2", 10)
+             .attr("stroke", "black")
+             .attr("stroke-width", 2);
+            g.append("path")
+             .attr("d", "M16,6 L20,10 L16,14 Z")
+             .attr("fill", "black");
+          });
+      
+      // Draw a line from bottom left to top right (with padding)
+      // Apply the custom markers at the start (female) and end (male)
+      svg.append("line")
+          .attr("x1", padding)
+          .attr("y1", height - padding)
+          .attr("x2", width - padding)
+          .attr("y2", padding)
+          .attr("stroke", "black")
+          .attr("stroke-width", 2)
+          .attr("marker-start", "url(#female-marker)")
+          .attr("marker-end", "url(#male-marker)");
+      
+      // Adjust SVG dimensions and arrow on window resize
+      window.addEventListener("resize", () => {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        svg.attr("width", width)
+           .attr("height", height);
+        svg.select("line")
+           .attr("x1", padding)
+           .attr("y1", height - padding)
+           .attr("x2", width - padding)
+           .attr("y2", padding);
+      });
+      
+      // Full Screen toggle functionality
+      document.getElementById("fullscreen-btn").addEventListener("click", () => {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen();
+        } else {
+          document.exitFullscreen();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

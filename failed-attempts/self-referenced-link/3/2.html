@@ -48,15 +48,12 @@
       // Import D3.js using use‑m
       const d3 = await use('d3');
 
-      // golden ratio
-      const phi = (1 + Math.sqrt(5)) / 2;
-
       // ----------------------------
       // Adjustable parameters
       // ----------------------------
-      const basePadding = 155;   // Margin from each edge
-      // con = 80;   // Extra offset so large markers don't overlap edges
-      const strokeWidth = 12;     // Thickness for the main diagonal line
+      const basePadding = 200;   // Margin from each edge
+      const markerOffset = 80;   // Extra offset so large markers don't overlap edges
+      const strokeWidth = 4;     // Thickness for the main diagonal line
 
       let width = window.innerWidth;
       let height = window.innerHeight;
@@ -71,12 +68,12 @@
       // Calculate where the line starts/ends initially
       // ------------------------------------------------
       let start = {
-        x: basePadding,
-        y: height - basePadding
+        x: basePadding + markerOffset,
+        y: height - (basePadding + markerOffset)
       };
       let end = {
-        x: width - basePadding,
-        y: basePadding
+        x: width - (basePadding + markerOffset),
+        y: basePadding + markerOffset
       };
 
       // Flags to check if the endpoints have been moved manually
@@ -85,16 +82,7 @@
       // Function to update coordinates display
       function updateCoordinates() {
         const coordsDiv = document.getElementById("coordinates");
-        coordsDiv.innerText = `Start: (${
-  Math.round(start.x) - basePadding
-}, ${
-  Math.round(start.y) - height + basePadding
-})
-End:   (${
-  Math.round(end.x) - width + basePadding
-}, ${
-  Math.round(end.y) - basePadding
-})`;
+        coordsDiv.innerText = `Start: (${Math.round(start.x)}, ${Math.round(start.y)})\nEnd:   (${Math.round(end.x)}, ${Math.round(end.y)})`;
       }
       updateCoordinates();
 
@@ -116,8 +104,8 @@ End:   (${
           .call(g => {
             // Perpendicular line segment
             g.append("line")
-             .attr("x1", 62.5 - (12.5 - 12.5 / phi)).attr("y1", 25 + 14.5 - 0.23)
-             .attr("x2", 62.5 - (12.5 - 12.5 / phi)).attr("y2", 75 - 14.5 + 0.23)
+             .attr("x1", 62.5 - 12.5 * 0.33).attr("y1", 25 + 14.5 - 0.23)
+             .attr("x2", 62.5 - 12.5 * 0.33).attr("y2", 75 - 14.5 + 0.23)
              .attr("stroke", "black");
           });
 
@@ -233,16 +221,16 @@ End:   (${
 
         // Only recalc endpoints if they haven't been moved manually
         if (!startMoved) {
-          start.x = basePadding;
-          start.y = height - basePadding;
+          start.x = basePadding + markerOffset;
+          start.y = height - (basePadding + markerOffset);
           svg.select("circle.start")
              .attr("cx", start.x)
              .attr("cy", start.y);
           mainLine.attr("x1", start.x).attr("y1", start.y);
         }
         if (!endMoved) {
-          end.x = width - basePadding;
-          end.y = basePadding;
+          end.x = width - (basePadding + markerOffset);
+          end.y = basePadding + markerOffset;
           svg.select("circle.end")
              .attr("cx", end.x)
              .attr("cy", end.y);

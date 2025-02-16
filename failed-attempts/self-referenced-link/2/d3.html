@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>D3 Arrow with use‑m</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+    svg {
+      display: block;
+    }
+    #fullscreen-btn {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      z-index: 1000;
+      padding: 10px 15px;
+      background: rgba(255, 255, 255, 0.8);
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <button id="fullscreen-btn">Full Screen</button>
+  <!-- We use a module script to import use-m and then load D3 -->
+  <script type="module">
+    const { use } = await import("https://esm.sh/use-m");
+    (async () => {
+      // Import D3.js using use‑m
+      const d3 = await use('d3');
+      
+      // Define padding and canvas dimensions
+      const padding = 50;
+      let width = window.innerWidth;
+      let height = window.innerHeight;
+      
+      // Create a full-page SVG canvas
+      const svg = d3.select("body")
+        .append("svg")
+        .attr("width", width)
+        .attr("height", height);
+      
+      // Define an arrow marker in the SVG defs
+      const defs = svg.append("defs");
+      defs.append("marker")
+          .attr("id", "arrowhead")
+          .attr("viewBox", "0 0 10 10")
+          .attr("refX", 10)
+          .attr("refY", 5)
+          .attr("markerWidth", 6)
+          .attr("markerHeight", 6)
+          .attr("orient", "auto")
+        .append("path")
+          .attr("d", "M 0 0 L 10 5 L 0 10 Z")
+          .attr("fill", "black");
+      
+      // Draw an arrow line from bottom left to top right (with padding)
+      svg.append("line")
+          .attr("x1", padding)
+          .attr("y1", height - padding)
+          .attr("x2", width - padding)
+          .attr("y2", padding)
+          .attr("stroke", "black")
+          .attr("stroke-width", 2)
+          .attr("marker-end", "url(#arrowhead)");
+      
+      // Adjust SVG dimensions and arrow on window resize
+      window.addEventListener("resize", () => {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        svg.attr("width", width)
+           .attr("height", height);
+        svg.select("line")
+           .attr("x1", padding)
+           .attr("y1", height - padding)
+           .attr("x2", width - padding)
+           .attr("y2", padding);
+      });
+      
+      // Full Screen toggle functionality
+      document.getElementById("fullscreen-btn").addEventListener("click", () => {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen();
+        } else {
+          document.exitFullscreen();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

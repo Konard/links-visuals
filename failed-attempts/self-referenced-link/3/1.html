@@ -25,38 +25,22 @@
       cursor: pointer;
       font-size: 14px;
     }
-    /* Coordinates panel */
-    #coordinates {
-      position: fixed;
-      bottom: 10px;
-      left: 10px;
-      z-index: 1000;
-      background: rgba(255, 255, 255, 0.8);
-      padding: 10px;
-      font-family: monospace;
-      font-size: 12px;
-      white-space: pre; /* preserve newlines */
-    }
   </style>
 </head>
 <body>
   <button id="fullscreen-btn">Full Screen</button>
-  <div id="coordinates"></div>
   <script type="module">
     const { use } = await import("https://esm.sh/use-m");
     (async () => {
       // Import D3.js using use‑m
       const d3 = await use('d3');
 
-      // golden ratio
-      const phi = (1 + Math.sqrt(5)) / 2;
-
       // ----------------------------
       // Adjustable parameters
       // ----------------------------
-      const basePadding = 155;   // Margin from each edge
-      // con = 80;   // Extra offset so large markers don't overlap edges
-      const strokeWidth = 12;     // Thickness for the main diagonal line
+      const basePadding = 200;   // Margin from each edge
+      const markerOffset = 80;   // Extra offset so large markers don't overlap edges
+      const strokeWidth = 4;     // Thickness for the diagonal line & marker lines
 
       let width = window.innerWidth;
       let height = window.innerHeight;
@@ -71,39 +55,23 @@
       // Calculate where the line starts/ends initially
       // ------------------------------------------------
       let start = {
-        x: basePadding,
-        y: height - basePadding
+        x: basePadding + markerOffset,
+        y: height - (basePadding + markerOffset)
       };
       let end = {
-        x: width - basePadding,
-        y: basePadding
+        x: width - (basePadding + markerOffset),
+        y: basePadding + markerOffset
       };
 
       // Flags to check if the endpoints have been moved manually
       let startMoved = false, endMoved = false;
-
-      // Function to update coordinates display
-      function updateCoordinates() {
-        const coordsDiv = document.getElementById("coordinates");
-        coordsDiv.innerText = `Start: (${
-  Math.round(start.x) - basePadding
-}, ${
-  Math.round(start.y) - height + basePadding
-})
-End:   (${
-  Math.round(end.x) - width + basePadding
-}, ${
-  Math.round(end.y) - basePadding
-})`;
-      }
-      updateCoordinates();
 
       // ------------------------------------------------
       // Define markers (cross on the left, arrow on the right)
       // ------------------------------------------------
       const defs = svg.append("defs");
 
-      // CROSS MARKER (Note: no extra stroke-width for inner lines)
+      // CROSS MARKER
       defs.append("marker")
           .attr("id", "cross-marker")
           .attr("viewBox", "0 0 100 100")
@@ -114,14 +82,19 @@ End:   (${
           .attr("orient", "auto")
         .append("g")
           .call(g => {
-            // Perpendicular line segment
+            // Horizontal bar
             g.append("line")
-             .attr("x1", 62.5 - (12.5 - 12.5 / phi)).attr("y1", 25 + 14.5 - 0.23)
-             .attr("x2", 62.5 - (12.5 - 12.5 / phi)).attr("y2", 75 - 14.5 + 0.23)
+             .attr("x1", 10).attr("y1", 50)
+             .attr("x2", 90).attr("y2", 50)
+             .attr("stroke", "black");
+            // Vertical bar
+            g.append("line")
+             .attr("x1", 50).attr("y1", 10)
+             .attr("x2", 50).attr("y2", 90)
              .attr("stroke", "black");
           });
 
-      // ARROW MARKER (Note: no extra stroke-width for inner lines)
+      // ARROW MARKER
       defs.append("marker")
           .attr("id", "arrow-marker")
           .attr("viewBox", "0 0 100 100")
@@ -133,24 +106,19 @@ End:   (${
         .append("g")
           .call(g => {
             // Arrow shaft
-            // g.append("line")
-            //  .attr("x1", 10).attr("y1", 50)
-            //  .attr("x2", 90).attr("y2", 50)
-            //  .attr("stroke", "black");
+            g.append("line")
+             .attr("x1", 10).attr("y1", 50)
+             .attr("x2", 90).attr("y2", 50)
+             .attr("stroke", "black");
             // Upper arrow line
             g.append("line")
-            //  .attr("x1", 9.65).attr("y1", 50 - 0.30)
-            //  .attr("x2", -0.5 - 0.30).attr("y2", 40 - 0.30 - 0.5)
-              .attr("x1", 10 + 0.35).attr("y1", 50 + 0.35)
-              .attr("x2", 0 - 0.35).attr("y2", 40 - 0.35)
+             .attr("x1", 90).attr("y1", 50)
+             .attr("x2", 80).attr("y2", 40)
              .attr("stroke", "black");
             // Lower arrow line
             g.append("line")
-            //  .attr("x1", 10.35).attr("y1", 50 - 0.30)
-            //  .attr("x2", -0.5 + 0.30).attr("y2", 60 - 0.30 + 0.5)
-
-              .attr("x1", 10 + 0.35).attr("y1", 50 - 0.35)
-              .attr("x2", 0 - 0.35).attr("y2", 60 + 0.35)
+             .attr("x1", 90).attr("y1", 50)
+             .attr("x2", 80).attr("y2", 60)
              .attr("stroke", "black");
           });
 
@@ -177,7 +145,6 @@ End:   (${
             .attr("cx", start.x)
             .attr("cy", start.y);
           mainLine.attr("x1", start.x).attr("y1", start.y);
-          updateCoordinates();
         });
 
       const dragEnd = d3.drag()
@@ -189,7 +156,6 @@ End:   (${
             .attr("cx", end.x)
             .attr("cy", end.y);
           mainLine.attr("x2", end.x).attr("y2", end.y);
-          updateCoordinates();
         });
 
       // Append circles at the start and end positions
@@ -198,12 +164,7 @@ End:   (${
          .attr("cx", start.x)
          .attr("cy", start.y)
          .attr("r", 10)
-        //  .attr("fill", "green")
-          .attr("fill", "transparent")
-          .attr("stroke", "green")
-          // dashed stroke for the start marker
-          .attr("stroke-dasharray", "2,2")
-          .attr("stroke-opacity", 0.5)
+         .attr("fill", "red")
          .style("cursor", "pointer")
          .call(dragStart);
 
@@ -212,14 +173,7 @@ End:   (${
          .attr("cx", end.x)
          .attr("cy", end.y)
          .attr("r", 10)
-         .attr("fill", "transparent")
-         .attr("stroke", "red")
-         // dashed stroke for the end marker
-        .attr("stroke-dasharray", "2,2")
-
-        // opacity 0.5
-        .attr("stroke-opacity", 0.5)
-         
+         .attr("fill", "blue")
          .style("cursor", "pointer")
          .call(dragEnd);
 
@@ -233,22 +187,21 @@ End:   (${
 
         // Only recalc endpoints if they haven't been moved manually
         if (!startMoved) {
-          start.x = basePadding;
-          start.y = height - basePadding;
+          start.x = basePadding + markerOffset;
+          start.y = height - (basePadding + markerOffset);
           svg.select("circle.start")
              .attr("cx", start.x)
              .attr("cy", start.y);
           mainLine.attr("x1", start.x).attr("y1", start.y);
         }
         if (!endMoved) {
-          end.x = width - basePadding;
-          end.y = basePadding;
+          end.x = width - (basePadding + markerOffset);
+          end.y = basePadding + markerOffset;
           svg.select("circle.end")
              .attr("cx", end.x)
              .attr("cy", end.y);
           mainLine.attr("x2", end.x).attr("y2", end.y);
         }
-        updateCoordinates();
       });
 
       // ------------------------------------------------

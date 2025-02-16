@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Infinity Arrow Link Demo</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    .demo { display: none; border: 1px solid #ccc; margin: 10px 0; }
+    #d3-demo, #sigma-demo, #cytoscape-demo { width: 500px; height: 400px; }
+    button { margin: 5px; padding: 5px 10px; }
+  </style>
+</head>
+<body>
+  <h1>Infinity Arrow Link Demo</h1>
+  <div>
+    <button onclick="showDemo('d3-demo')">D3.js View</button>
+    <button onclick="showDemo('sigma-demo')">Sigma.js View</button>
+    <button onclick="showDemo('cytoscape-demo')">Cytoscape.js View</button>
+  </div>
+
+  <div id="d3-demo" class="demo"></div>
+  <div id="sigma-demo" class="demo"></div>
+  <div id="cytoscape-demo" class="demo"></div>
+
+  <!-- Use a module script so we can import libraries properly -->
+  <script type="module">
+    // Import libraries as ES modules:
+    import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+    // Updated sigma import URL to point to the minified ESM build:
+    import sigma from "https://cdn.jsdelivr.net/npm/sigma@2.3.0/build/sigma.esm.min.js";
+    import cytoscape from "https://unpkg.com/cytoscape@3.24.0/dist/cytoscape.esm.js";
+
+    // Attach showDemo to the global window object so inline onclick attributes can access it.
+    window.showDemo = function(id) {
+      document.getElementById('d3-demo').style.display = 'none';
+      document.getElementById('sigma-demo').style.display = 'none';
+      document.getElementById('cytoscape-demo').style.display = 'none';
+      document.getElementById(id).style.display = 'block';
+    }
+    // Initially show the D3 view.
+    showDemo('d3-demo');
+
+    /* -----------------------------
+       D3.js Demo
+       ----------------------------- */
+    (function() {
+      // Create an SVG element in the #d3-demo container.
+      const svg = d3.select("#d3-demo")
+                    .append("svg")
+                    .attr("width", 500)
+                    .attr("height", 400);
+      
+      // Define an arrow marker in <defs>.
+      svg.append("defs").append("marker")
+         .attr("id", "arrow")
+         .attr("viewBox", "0 0 10 10")
+         .attr("refX", "0")
+         .attr("refY", "5")
+         .attr("markerWidth", "6")
+         .attr("markerHeight", "6")
+         .attr("orient", "auto")
+         .append("path")
+         .attr("d", "M 0 0 L 10 5 L 0 10 z")
+         .attr("fill", "red");
+
+      // Define a self-loop path drawn like an infinity symbol.
+      const pathData = "M150,150 C100,50, 250,50, 200,150 C150,250, 50,250, 150,150";
+      
+      // Draw the path with the arrow marker at the end.
+      svg.append("path")
+         .attr("d", pathData)
+         .attr("fill", "none")
+         .attr("stroke", "black")
+         .attr("stroke-width", 2)
+         .attr("marker-end", "url(#arrow)");
+      
+      // Draw a blue circle at the center (the node).
+      svg.append("circle")
+         .attr("cx", 150)
+         .attr("cy", 150)
+         .attr("r", 5)
+         .attr("fill", "blue");
+    })();
+
+    /* -----------------------------
+       Sigma.js Demo
+       ----------------------------- */
+    (function() {
+      // Get the container element.
+      const container = document.getElementById('sigma-demo');
+      // Create a simple graph with one node and a self-loop edge.
+      const graph = {
+        nodes: [
+          { id: 'n1', label: 'Node', x: 150, y: 150, size: 10, color: '#666' }
+        ],
+        edges: [
+          { id: 'e1', source: 'n1', target: 'n1', type: 'infinityEdge', color: '#000' }
+        ]
+      };
+
+      // Define a custom edge renderer for type "infinityEdge".
+      sigma.canvas.edges.infinityEdge = function(edge, source, target, context, settings) {
+        // Use the node's position (x, y) as base.
+        const x = source.x,
+              y = source.y;
+        context.beginPath();
+        context.moveTo(x, y);
+        // Draw first cubic Bézier curve:
+        context.bezierCurveTo(x - 50, y - 100, x + 100, y - 100, x + 50, y);
+        // Draw second cubic Bézier curve back to (x, y):
+        context.bezierCurveTo(x + 50, y + 100, x - 100, y + 100, x, y);
+        context.strokeStyle = edge.color || settings('edgeColor') || '#000';
+        context.lineWidth = settings('edgeWidth') || 2;
+        context.stroke();
+
+        // Draw an arrowhead (red) at the node center.
+        context.fillStyle = "red";
+        const size = 6;
+        context.beginPath();
+        context.moveTo(x, y - size);
+        context.lineTo(x - size, y + size);
+        context.lineTo(x + size, y + size);
+        context.closePath();
+        context.fill();
+      };
+
+      // Initialize sigma with the graph.
+      const sigmaInstance = new sigma({
+        graph: graph,
+        container: container,
+        settings: {
+          defaultEdgeType: 'infinityEdge'
+        }
+      });
+    })();
+
+    /* -----------------------------
+       Cytoscape.js Demo
+       ----------------------------- */
+    (function() {
+      // Initialize Cytoscape with one node and a self-loop edge.
+      const cy = cytoscape({
+        container: document.getElementById('cytoscape-demo'),
+        elements: [
+          { data: { id: 'n1' } },
+          { data: { id: 'e1', source: 'n1', target: 'n1' } }
+        ],
+        style: [
+          {
+            selector: 'node',
+            style: {
+              'background-color': '#666',
+              'label': 'data(id)',
+              'width': 20,
+              'height': 20
+            }
+          },
+          {
+            selector: 'edge',
+            style: {
+              'curve-style': 'unbundled-bezier',
+              'control-point-distances': [-50, 50],
+              'control-point-weights': [0.25, 0.75],
+              'line-color': '#000',
+              'width': 2,
+              'target-arrow-shape': 'triangle',
+              'target-arrow-color': 'red'
+            }
+          }
+        ],
+        layout: {
+          name: 'preset'
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

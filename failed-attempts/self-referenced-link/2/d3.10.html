@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>D3 Link with Uniform Padding & Thinner Stroke</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+    svg {
+      display: block;
+    }
+    #fullscreen-btn {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      z-index: 1000;
+      padding: 10px 15px;
+      background: rgba(255, 255, 255, 0.8);
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <button id="fullscreen-btn">Full Screen</button>
+  <script type="module">
+    const { use } = await import("https://esm.sh/use-m");
+    (async () => {
+      // Import D3.js using use‑m
+      const d3 = await use('d3');
+
+      // ----------------------------
+      // Adjustable parameters
+      // ----------------------------
+      const basePadding = 200;   // Margin from each edge
+      const markerOffset = 80;   // Extra offset so large markers don't overlap edges
+      const strokeWidth = 4;     // Thickness for the diagonal line & marker lines
+
+      let width = window.innerWidth;
+      let height = window.innerHeight;
+
+      // Create an SVG covering the page
+      const svg = d3.select("body")
+        .append("svg")
+        .attr("width", width)
+        .attr("height", height);
+
+      // ------------------------------------------------
+      // Calculate where the line starts/ends
+      // ------------------------------------------------
+      // We shift in from each edge by (basePadding + markerOffset)
+      // so the large cross/arrow remain well inside the page.
+      const x1 = basePadding + markerOffset;
+      const y1 = height - (basePadding + markerOffset);
+      const x2 = width - (basePadding + markerOffset);
+      const y2 = basePadding + markerOffset;
+
+      // ------------------------------------------------
+      // Define markers (cross on the left, arrow on the right)
+      // ------------------------------------------------
+      const defs = svg.append("defs");
+
+      // 1) CROSS MARKER
+      // - Large bounding box (100×100)
+      // - Long arms, but each arm has strokeWidth = 4
+      // - Center is (50,50), so it rotates around that point
+      defs.append("marker")
+          .attr("id", "cross-marker")
+          .attr("viewBox", "0 0 100 100")
+          .attr("markerWidth", 100)
+          .attr("markerHeight", 100)
+          .attr("refX", 50)
+          .attr("refY", 50)
+          .attr("orient", "auto")   // rotates with the line
+        .append("g")
+          .call(g => {
+            // Horizontal bar
+            g.append("line")
+             .attr("x1", 10).attr("y1", 50)
+             .attr("x2", 90).attr("y2", 50)
+             .attr("stroke", "black");
+
+            // Vertical bar
+            g.append("line")
+             .attr("x1", 50).attr("y1", 10)
+             .attr("x2", 50).attr("y2", 90)
+             .attr("stroke", "black")
+          });
+
+      // 2) OPEN ARROW MARKER
+      // - A long shaft (10..90) plus two angled lines forming a "V" tip
+      // - We anchor the line at (10,50) so the arrow tip is near (90,50)
+      defs.append("marker")
+          .attr("id", "arrow-marker")
+          .attr("viewBox", "0 0 100 100")
+          .attr("markerWidth", 100)
+          .attr("markerHeight", 100)
+          .attr("refX", 10)  // line's end is at x=10 in the marker
+          .attr("refY", 50)
+          .attr("orient", "auto")   // rotates with the line
+        .append("g")
+          .call(g => {
+            // Arrow shaft
+            g.append("line")
+             .attr("x1", 10).attr("y1", 50)
+             .attr("x2", 90).attr("y2", 50)
+             .attr("stroke", "black")
+
+            // Upper arrow line
+            g.append("line")
+             .attr("x1", 90).attr("y1", 50)
+             .attr("x2", 80).attr("y2", 40)
+             .attr("stroke", "black")
+
+            // Lower arrow line
+            g.append("line")
+             .attr("x1", 90).attr("y1", 50)
+             .attr("x2", 80).attr("y2", 60)
+             .attr("stroke", "black")
+          });
+
+      // ------------------------------------------------
+      // Draw the main diagonal line
+      // ------------------------------------------------
+      svg.append("line")
+         .attr("x1", x1).attr("y1", y1)
+         .attr("x2", x2).attr("y2", y2)
+         .attr("stroke", "black")
+         .attr("stroke-width", strokeWidth)
+         .attr("marker-start", "url(#cross-marker)")
+         .attr("marker-end", "url(#arrow-marker)");
+
+      // ------------------------------------------------
+      // Handle window resizing
+      // ------------------------------------------------
+      window.addEventListener("resize", () => {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        svg.attr("width", width).attr("height", height);
+
+        const x1r = basePadding + markerOffset;
+        const y1r = height - (basePadding + markerOffset);
+        const x2r = width - (basePadding + markerOffset);
+        const y2r = basePadding + markerOffset;
+
+        svg.select("line")
+           .attr("x1", x1r).attr("y1", y1r)
+           .attr("x2", x2r).attr("y2", y2r);
+      });
+
+      // Full Screen toggle
+      document.getElementById("fullscreen-btn").addEventListener("click", () => {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen();
+        } else {
+          document.exitFullscreen();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

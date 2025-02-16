@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>D3 Link with Big Cross & Arrow</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+    svg {
+      display: block;
+    }
+    #fullscreen-btn {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      z-index: 1000;
+      padding: 10px 15px;
+      background: rgba(255, 255, 255, 0.8);
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <button id="fullscreen-btn">Full Screen</button>
+  <script type="module">
+    const { use } = await import("https://esm.sh/use-m");
+    (async () => {
+      // Import D3.js using use‑m
+      const d3 = await use('d3');
+      
+      // Increase padding so the line is farther from the edges
+      const padding = 100;
+      let width = window.innerWidth;
+      let height = window.innerHeight;
+      
+      // Create a full-page SVG canvas
+      const svg = d3.select("body")
+        .append("svg")
+        .attr("width", width)
+        .attr("height", height);
+      
+      // Define SVG markers in the defs section
+      const defs = svg.append("defs");
+
+      // LARGE CROSS MARKER (Upright)
+      // --------------------------------
+      // - orient="0" so the cross does NOT rotate with the line
+      // - Big markerWidth/markerHeight so it’s 10–30% of the line’s length
+      defs.append("marker")
+          .attr("id", "cross-marker")
+          .attr("viewBox", "0 0 60 60")
+          .attr("refX", 30)           // center of cross horizontally
+          .attr("refY", 30)           // center of cross vertically
+          .attr("markerWidth", 60)    // bigger means a larger symbol
+          .attr("markerHeight", 60)
+          .attr("orient", "0")        // keep cross upright
+        .append("g")
+          .call(g => {
+            // Horizontal bar
+            g.append("line")
+             .attr("x1", 10)
+             .attr("y1", 30)
+             .attr("x2", 50)
+             .attr("y2", 30)
+             .attr("stroke", "black")
+             .attr("stroke-width", 8);
+            // Vertical bar
+            g.append("line")
+             .attr("x1", 30)
+             .attr("y1", 10)
+             .attr("x2", 30)
+             .attr("y2", 50)
+             .attr("stroke", "black")
+             .attr("stroke-width", 8);
+          });
+      
+      // LARGE ARROW MARKER (Aligned with the line)
+      // --------------------------------
+      // - orient="auto" so the arrow rotates to match the line direction
+      defs.append("marker")
+          .attr("id", "arrow-marker")
+          .attr("viewBox", "0 0 60 60")
+          .attr("refX", 5)        // where the tip meets the line
+          .attr("refY", 30)
+          .attr("markerWidth", 60)
+          .attr("markerHeight", 60)
+          .attr("orient", "auto")
+        .append("path")
+          // A large arrow shape
+          .attr("d", "M5,30 L50,30 L35,15 L35,45 Z")
+          .attr("fill", "black");
+      
+      // Draw a thicker line from bottom-left to top-right
+      svg.append("line")
+          .attr("x1", padding)
+          .attr("y1", height - padding)
+          .attr("x2", width - padding)
+          .attr("y2", padding)
+          .attr("stroke", "black")
+          .attr("stroke-width", 5)
+          .attr("marker-start", "url(#cross-marker)")
+          .attr("marker-end", "url(#arrow-marker)");
+      
+      // Adjust SVG dimensions and line on window resize
+      window.addEventListener("resize", () => {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        svg.attr("width", width)
+           .attr("height", height);
+        svg.select("line")
+           .attr("x1", padding)
+           .attr("y1", height - padding)
+           .attr("x2", width - padding)
+           .attr("y2", padding);
+      });
+      
+      // Full Screen toggle functionality
+      document.getElementById("fullscreen-btn").addEventListener("click", () => {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen();
+        } else {
+          document.exitFullscreen();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
