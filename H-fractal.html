@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>D3 Static Horizontal Arrow</title>
+  <title>D3 Link with Uniform Padding & Thinner Stroke</title>
   <style>
     html, body {
       margin: 0;
@@ -32,10 +32,17 @@
   <script type="module">
     const { use } = await import("https://esm.sh/use-m");
     (async () => {
+      // Import D3.js using use‑m
       const d3 = await use('d3');
 
-      const strokeWidth = 12; // Line thickness
-      const basePadding = 155; // Horizontal margin from each edge
+      // golden ratio
+      const phi = (1 + Math.sqrt(5)) / 2;
+
+      // ----------------------------
+      // Adjustable parameters
+      // ----------------------------
+      const basePadding = 155;   // Margin from each edge
+      const strokeWidth = 12;    // Thickness for the main line
 
       let width = window.innerWidth;
       let height = window.innerHeight;
@@ -46,42 +53,86 @@
         .attr("width", width)
         .attr("height", height);
 
-      // Calculate start and end points for a horizontal line in the center
+      // ------------------------------------------------
+      // Recalculate where the line starts/ends for a horizontal arrow in the middle
+      // ------------------------------------------------
       let start = { x: basePadding, y: height / 2 };
       let end = { x: width - basePadding, y: height / 2 };
 
-      // Define a simple arrow marker (polygon) that points right
+      // ------------------------------------------------
+      // Define markers (using original geometry)
+      // ------------------------------------------------
       const defs = svg.append("defs");
+
+      // CROSS MARKER
+      defs.append("marker")
+          .attr("id", "cross-marker")
+          .attr("viewBox", "0 0 100 100")
+          .attr("markerWidth", 100)
+          .attr("markerHeight", 100)
+          .attr("refX", 50)
+          .attr("refY", 50)
+          .attr("orient", "auto")
+        .append("g")
+          .call(g => {
+            g.append("line")
+             .attr("x1", 62.5 - (12.5 - 12.5 / phi))
+             .attr("y1", 25 + 14.5 - 0.23)
+             .attr("x2", 62.5 - (12.5 - 12.5 / phi))
+             .attr("y2", 75 - 14.5 + 0.23)
+             .attr("stroke", "black");
+          });
+
+      // ARROW MARKER
       defs.append("marker")
           .attr("id", "arrow-marker")
-          .attr("viewBox", "0 0 10 10")
-          .attr("refX", 0)
-          .attr("refY", 5)
-          .attr("markerWidth", 6)
-          .attr("markerHeight", 6)
+          .attr("viewBox", "0 0 100 100")
+          .attr("markerWidth", 100)
+          .attr("markerHeight", 100)
+          .attr("refX", 10)
+          .attr("refY", 50)
           .attr("orient", "auto")
-        .append("path")
-          .attr("d", "M0,0 L10,5 L0,10 Z")
-          .attr("fill", "black");
+        .append("g")
+          .call(g => {
+            g.append("line")
+              .attr("x1", 10 + 0.35)
+              .attr("y1", 50 + 0.35)
+              .attr("x2", 0 - 0.35)
+              .attr("y2", 40 - 0.35)
+              .attr("stroke", "black");
+            g.append("line")
+              .attr("x1", 10 + 0.35)
+              .attr("y1", 50 - 0.35)
+              .attr("x2", 0 - 0.35)
+              .attr("y2", 60 + 0.35)
+              .attr("stroke", "black");
+          });
 
-      // Draw the horizontal line with the arrow marker at the end
+      // ------------------------------------------------
+      // Draw the main horizontal line with markers
+      // ------------------------------------------------
       const mainLine = svg.append("line")
-        .attr("x1", start.x)
-        .attr("y1", start.y)
-        .attr("x2", end.x)
-        .attr("y2", end.y)
-        .attr("stroke", "black")
-        .attr("stroke-width", strokeWidth)
-        .attr("marker-end", "url(#arrow-marker)");
+         .attr("x1", start.x)
+         .attr("y1", start.y)
+         .attr("x2", end.x)
+         .attr("y2", end.y)
+         .attr("stroke", "black")
+         .attr("stroke-width", strokeWidth)
+         .attr("marker-start", "url(#cross-marker)")
+         .attr("marker-end", "url(#arrow-marker)");
 
-      // Update positions on window resize
+      // ------------------------------------------------
+      // Handle window resizing
+      // ------------------------------------------------
       window.addEventListener("resize", () => {
         width = window.innerWidth;
         height = window.innerHeight;
         svg.attr("width", width).attr("height", height);
 
+        // Recalculate the horizontal line positions for the new dimensions
         start = { x: basePadding, y: height / 2 };
         end = { x: width - basePadding, y: height / 2 };
+
         mainLine
           .attr("x1", start.x)
           .attr("y1", start.y)
@@ -89,7 +140,9 @@
           .attr("y2", end.y);
       });
 
+      // ------------------------------------------------
       // Full Screen toggle
+      // ------------------------------------------------
       document.getElementById("fullscreen-btn").addEventListener("click", () => {
         if (!document.fullscreenElement) {
           document.documentElement.requestFullscreen();
