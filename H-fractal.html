@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>D3 Link with Uniform Padding & Thinner Stroke</title>
+  <title>H-Fractal Arrow</title>
   <style>
-    html, body {
+    html,
+    body {
       margin: 0;
       padding: 0;
       height: 100%;
@@ -14,143 +16,188 @@
     svg {
       display: block;
     }
-    #fullscreen-btn {
-      position: fixed;
-      top: 10px;
-      right: 10px;
-      z-index: 1000;
-      padding: 10px 15px;
-      background: rgba(255, 255, 255, 0.8);
-      border: none;
-      cursor: pointer;
-      font-size: 14px;
-    }
   </style>
 </head>
+
 <body>
-  <button id="fullscreen-btn">Full Screen</button>
   <script type="module">
+    const gap = 9;
+    const rotationGap = 0.30;
+    
     const { use } = await import("https://esm.sh/use-m");
     (async () => {
-      // Import D3.js using use‑m
       const d3 = await use('d3');
 
-      // golden ratio
-      const phi = (1 + Math.sqrt(5)) / 2;
-
-      // ----------------------------
-      // Adjustable parameters
-      // ----------------------------
-      const basePadding = 155;   // Margin from each edge
-      const strokeWidth = 12;    // Thickness for the main line
-
+      // Global dimensions and padding.
+      const basePadding = 155;
       let width = window.innerWidth;
       let height = window.innerHeight;
 
-      // Create an SVG covering the page
+      // Create an SVG covering the viewport.
       const svg = d3.select("body")
         .append("svg")
         .attr("width", width)
         .attr("height", height);
 
-      // ------------------------------------------------
-      // Recalculate where the line starts/ends for a horizontal arrow in the middle
-      // ------------------------------------------------
-      let start = { x: basePadding, y: height / 2 };
-      let end = { x: width - basePadding, y: height / 2 };
-
-      // ------------------------------------------------
-      // Define markers (using original geometry)
-      // ------------------------------------------------
+      // --------------------------------------------------
+      // Define markers (keeping original geometry)
+      // --------------------------------------------------
       const defs = svg.append("defs");
 
-      // CROSS MARKER
+      // CROSS MARKER (for marker-start)
       defs.append("marker")
-          .attr("id", "cross-marker")
-          .attr("viewBox", "0 0 100 100")
-          .attr("markerWidth", 100)
-          .attr("markerHeight", 100)
-          .attr("refX", 50)
-          .attr("refY", 50)
-          .attr("orient", "auto")
+        .attr("id", "cross-marker")
+        .attr("viewBox", "0 0 100 100")
+        .attr("markerWidth", 100)
+        .attr("markerHeight", 100)
+        .attr("refX", 50)
+        .attr("refY", 50)
+        .attr("orient", "auto")
         .append("g")
-          .call(g => {
-            g.append("line")
-             .attr("x1", 62.5 - (12.5 - 12.5 / phi))
-             .attr("y1", 25 + 14.5 - 0.23)
-             .attr("x2", 62.5 - (12.5 - 12.5 / phi))
-             .attr("y2", 75 - 14.5 + 0.23)
-             .attr("stroke", "black");
-          });
+        .call(g => {
+          const phi = (1 + Math.sqrt(5)) / 2;
+          g.append("line")
+            .attr("x1", 62.5 - (12.5 - 12.5 / phi))
+            .attr("y1", 25 + 14.5 - 0.23)
+            .attr("x2", 62.5 - (12.5 - 12.5 / phi))
+            .attr("y2", 75 - 14.5 + 0.23)
+            .attr("stroke", "black");
+        });
 
-      // ARROW MARKER
+      // ARROW MARKER (for marker-end)
       defs.append("marker")
-          .attr("id", "arrow-marker")
-          .attr("viewBox", "0 0 100 100")
-          .attr("markerWidth", 100)
-          .attr("markerHeight", 100)
-          .attr("refX", 10)
-          .attr("refY", 50)
-          .attr("orient", "auto")
+        .attr("id", "arrow-marker")
+        .attr("viewBox", "0 0 100 100")
+        .attr("markerWidth", 100)
+        .attr("markerHeight", 100)
+        .attr("refX", 10)
+        .attr("refY", 50)
+        .attr("orient", "auto")
         .append("g")
-          .call(g => {
-            g.append("line")
-              .attr("x1", 10 + 0.35)
-              .attr("y1", 50 + 0.35)
-              .attr("x2", 0 - 0.35)
-              .attr("y2", 40 - 0.35)
-              .attr("stroke", "black");
-            g.append("line")
-              .attr("x1", 10 + 0.35)
-              .attr("y1", 50 - 0.35)
-              .attr("x2", 0 - 0.35)
-              .attr("y2", 60 + 0.35)
-              .attr("stroke", "black");
-          });
+        .call(g => {
+          g.append("line")
+            .attr("x1", 10 + rotationGap)
+            .attr("y1", 50 + rotationGap)
+            .attr("x2", 0 - rotationGap)
+            .attr("y2", 40 - rotationGap)
+            .attr("stroke", "black");
+          g.append("line")
+            .attr("x1", 10 + rotationGap)
+            .attr("y1", 50 - rotationGap)
+            .attr("x2", 0 - rotationGap)
+            .attr("y2", 60 + rotationGap)
+            .attr("stroke", "black");
+        });
 
-      // ------------------------------------------------
-      // Draw the main horizontal line with markers
-      // ------------------------------------------------
-      const mainLine = svg.append("line")
-         .attr("x1", start.x)
-         .attr("y1", start.y)
-         .attr("x2", end.x)
-         .attr("y2", end.y)
-         .attr("stroke", "black")
-         .attr("stroke-width", strokeWidth)
-         .attr("marker-start", "url(#cross-marker)")
-         .attr("marker-end", "url(#arrow-marker)");
+      // --------------------------------------------------
+      // Fractal (H‑fractal) parameters and arrow objects
+      // --------------------------------------------------
+      // We'll use a scale factor to shrink each arrow.
+      const scaleFactor = 0.5;
+      let idCounter = 0;
+      let arrows = [];
 
-      // ------------------------------------------------
-      // Handle window resizing
-      // ------------------------------------------------
+      // An arrow object: { id, center: {x, y}, orientation (degrees), length, strokeWidth, subdivided }
+      function createArrow(center, orientation, length, strokeWidth) {
+        return {
+          id: idCounter++,
+          center: center,
+          orientation: orientation, // in degrees
+          length: length,
+          gap: gap,
+          strokeWidth: strokeWidth,
+          subdivided: false
+        };
+      }
+
+      // Initialize with the original horizontal arrow in the center.
+      const initialLength = width - 2 * basePadding;
+      arrows.push(createArrow({ x: width / 2, y: height / 2 }, 0, initialLength, 12));
+
+      // --------------------------------------------------
+      // Draw all arrows using D3 data join.
+      // --------------------------------------------------
+      function drawArrows() {
+        const arrowSelection = svg.selectAll(".arrow")
+          .data(arrows, d => d.id);
+
+        arrowSelection.enter()
+          .append("line")
+          .attr("class", "arrow")
+          .merge(arrowSelection)
+          .attr("x1", d => {
+            let rad = d.orientation * Math.PI / 180;
+            return d.center.x - (d.length / 2) * Math.cos(rad);
+          })
+          .attr("y1", d => {
+            let rad = d.orientation * Math.PI / 180;
+            return d.center.y - (d.length / 2) * Math.sin(rad);
+          })
+          .attr("x2", d => {
+            const rad = d.orientation * Math.PI / 180;
+            return d.center.x + ((d.length / 2) - (d.gap / 2)) * Math.cos(rad);
+          })
+          .attr("y2", d => {
+            const rad = d.orientation * Math.PI / 180;
+            return d.center.y + ((d.length / 2) - (d.gap / 2)) * Math.sin(rad);
+          })
+          .attr("stroke", "black")
+          .attr("stroke-width", d => d.strokeWidth)
+          .attr("marker-start", "url(#cross-marker)")
+          .attr("marker-end", "url(#arrow-marker)");
+
+        arrowSelection.exit().remove();
+      }
+
+      drawArrows();
+
+      // --------------------------------------------------
+      // Subdivide: for each non‐subdivided arrow, shrink it and add two new arrows.
+      // --------------------------------------------------
+      function subdivideArrows() {
+        const newArrows = [];
+        arrows.forEach(arrow => {
+          if (!arrow.subdivided) {
+            arrow.subdivided = true;
+            // Scale down the parent arrow.
+            arrow.length *= scaleFactor;
+            arrow.strokeWidth *= scaleFactor;
+            arrow.gap *= scaleFactor;
+
+            // Compute the endpoints of the parent's (now scaled) arrow.
+            let rad = arrow.orientation * Math.PI / 180;
+            let dx = (arrow.length / 2) * Math.cos(rad);
+            let dy = (arrow.length / 2) * Math.sin(rad);
+            let endpoint1 = { x: arrow.center.x - dx, y: arrow.center.y - dy };
+            let endpoint2 = { x: arrow.center.x + dx, y: arrow.center.y + dy };
+
+            // At endpoint1, create a new arrow rotated +90°.
+            newArrows.push(createArrow(endpoint1, arrow.orientation + 90, arrow.length, arrow.strokeWidth));
+            // At endpoint2, create a new arrow rotated -90°.
+            newArrows.push(createArrow(endpoint2, arrow.orientation - 90, arrow.length, arrow.strokeWidth));
+          }
+        });
+        arrows = arrows.concat(newArrows);
+        drawArrows();
+      }
+
+      // --------------------------------------------------
+      // On click (except on the full screen button), perform an iteration.
+      // --------------------------------------------------
+      document.addEventListener("click", function (e) {
+        subdivideArrows();
+      });
+
+      // --------------------------------------------------
+      // Handle window resizing.
+      // --------------------------------------------------
       window.addEventListener("resize", () => {
         width = window.innerWidth;
         height = window.innerHeight;
         svg.attr("width", width).attr("height", height);
-
-        // Recalculate the horizontal line positions for the new dimensions
-        start = { x: basePadding, y: height / 2 };
-        end = { x: width - basePadding, y: height / 2 };
-
-        mainLine
-          .attr("x1", start.x)
-          .attr("y1", start.y)
-          .attr("x2", end.x)
-          .attr("y2", end.y);
-      });
-
-      // ------------------------------------------------
-      // Full Screen toggle
-      // ------------------------------------------------
-      document.getElementById("fullscreen-btn").addEventListener("click", () => {
-        if (!document.fullscreenElement) {
-          document.documentElement.requestFullscreen();
-        } else {
-          document.exitFullscreen();
-        }
       });
     })();
   </script>
 </body>
+
 </html>
