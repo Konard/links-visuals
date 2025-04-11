@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>D3 Arrow: Dynamic Curvature Toward Infinity</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+    svg { display: block; }
+    #fullscreen-btn {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      z-index: 1000;
+      padding: 10px 15px;
+      background: rgba(255, 255, 255, 0.8);
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    #coordinates {
+      position: fixed;
+      bottom: 10px;
+      left: 10px;
+      z-index: 1000;
+      background: rgba(255, 255, 255, 0.8);
+      padding: 10px;
+      font-family: monospace;
+      font-size: 12px;
+      white-space: pre;
+    }
+  </style>
+</head>
+<body>
+  <button id="fullscreen-btn">Full Screen</button>
+  <div id="coordinates"></div>
+  <script type="module">
+    const { use } = await import("https://esm.sh/use-m");
+    (async () => {
+      const d3 = await use('d3');
+
+      // ----------------------------
+      // Adjustable parameters
+      // ----------------------------
+      const basePadding = 155;  // initial margin for endpoints
+      const snapThreshold = 20; // if an endpoint is within this distance of the center, snap it there
+
+      // Parameters for curvature adjustment:
+      const d_min = 50;       // Effective minimum distance (if closer than this, act as if it were d_min)
+      const d_max = 500;      // Distance above which the curve is completely straight (t = 1)
+      const theta_max = Math.PI/4; // Maximum rotation (45°) when endpoint is near center
+      // α: determines how far along the segment the intermediate point sits.
+      // Here, when t=1 (far away) we use α = 0.5 (halfway), and when t=0 (very near) we use α = 0.9.
+      
+      // ----------------------------
+      // Set up dimensions
+      // ----------------------------
+      let width = window.innerWidth;
+      let height = window.innerHeight;
+      // Fixed center: always the center of the viewport.
+      const fixedCenter = { x: width/2, y: height/2 };
+
+      // ----------------------------
+      // Create the SVG container
+      // ----------------------------
+      const svg = d3.select("body")
+        .append("svg")
+        .attr("width", width)
+        .attr("height", height);
+
+      // ----------------------------
+      // Initial endpoints (they are draggable)
+      // ----------------------------
+      let start = { x: basePadding, y: height - basePadding };
+      let end   = { x: width - basePadding, y: basePadding };
+      let startMoved = false, endMoved = false;
+
+      // ----------------------------
+      // Coordinates display (for debugging)
+      // ----------------------------
+      function updateCoordinates() {
+        const coordsDiv = document.getElementById("coordinates");
+        coordsDiv.innerText = 
+          `Start:       (${Math.round(start.x)}, ${Math.round(start.y)})
+End:         (${Math.round(end.x)}, ${Math.round(end.y)})
+FixedCenter: (${Math.round(fixedCenter.x)}, ${Math.round(fixedCenter.y)})`;
+      }
+      updateCoordinates();
+
+      // ----------------------------
+      // Marker definitions (a cross for start and arrow for end)
+      // ----------------------------
+      const defs = svg.append("defs");
+
+      // CROSS marker
+      defs.append("marker")
+        .attr("id", "cross-marker")
+        .attr("viewBox", "0 0 100 100")
+        .attr("markerWidth", 100)
+        .attr("markerHeight", 100)
+        .attr("refX", 50)
+        .attr("refY", 50)
+        .attr("orient", "auto")
+        .append("g")
+          .call(g => {
+            g.append("line")
+              .attr("x1", 62.5 - (12.5 - 12.5/1.618))
+              .attr("y1", 25 + 14.5 - 0.23)
+              .attr("x2", 62.5 - (12.5 - 12.5/1.618))
+              .attr("y2", 75 - 14.5 + 0.23)
+              .attr("stroke", "black");
+          });
+
+      // ARROW marker
+      defs.append("marker")
+        .attr("id", "arrow-marker")
+        .attr("viewBox", "0 0 100 100")
+        .attr("markerWidth", 100)
+        .attr("markerHeight", 100)
+        .attr("refX", 10)
+        .attr("refY", 50)
+        .attr("orient", "auto")
+        .append("g")
+          .call(g => {
+            g.append("line")
+              .attr("x1", 10 + 0.35)
+              .attr("y1", 50 + 0.35)
+              .attr("x2", 0 - 0.35)
+              .attr("y2", 40 - 0.35)
+              .attr("stroke", "black");
+            g.append("line")
+              .attr("x1", 10 + 0.35)
+              .attr("y1", 50 - 0.35)
+              .attr("x2", 0 - 0.35)
+              .attr("y2", 60 + 0.35)
+              .attr("stroke", "black");
+          });
+
+      // ----------------------------
+      // Create the main path using a smooth, continuous curve
+      // ----------------------------
+      const mainPath = svg.append("path")
+        .attr("fill", "none")
+        .attr("stroke", "black")
+        .attr("stroke-width", 12)
+        .attr("marker-start", "url(#cross-marker)")
+        .attr("marker-end", "url(#arrow-marker)");
+
+      // ----------------------------
+      // Utility: rotate a 2D vector by a given angle (radians)
+      // ----------------------------
+      function rotateVector(v, angle) {
+        return {
+          x: v.x * Math.cos(angle) - v.y * Math.sin(angle),
+          y: v.x * Math.sin(angle) + v.y * Math.cos(angle)
+        };
+      }
+
+      // ----------------------------
+      // Update the main path based on current endpoints
+      // This computes two intermediate points:
+      //   • For the left side: a point between start and fixedCenter
+      //   • For the right side: a point between fixedCenter and end
+      // Their positions are adjusted by parameters that depend on the effective distance.
+      // ----------------------------
+      function updatePath() {
+        // For left half (start to center):
+        let dx1 = fixedCenter.x - start.x;
+        let dy1 = fixedCenter.y - start.y;
+        let d1 = Math.hypot(dx1, dy1);
+        let d_eff1 = Math.max(d1, d_min);
+        // Normalized parameter: 0 when endpoint is very near (d_eff = d_min), 1 when far (d_eff = d_max or more)
+        let t1 = Math.max(0, Math.min(1, (d_eff1 - d_min) / (d_max - d_min)));
+        // α adjusts where along the vector the intermediate point lies:
+        let alpha_left = 0.5 + 0.4 * (1 - t1);  // 0.5 when far, up to 0.9 when near
+        // θ rotates the vector from start to center:
+        let theta_left = theta_max * (1 - t1);    // 0 when far, up to θ_max when near
+        let vec1 = { x: dx1, y: dy1 };
+        // Rotate vec1 by theta_left (counterclockwise)
+        let rotated1 = rotateVector(vec1, theta_left);
+        let midStart = {
+          x: start.x + alpha_left * rotated1.x,
+          y: start.y + alpha_left * rotated1.y
+        };
+
+        // For right half (center to end):
+        let dx2 = end.x - fixedCenter.x;
+        let dy2 = end.y - fixedCenter.y;
+        let d2 = Math.hypot(dx2, dy2);
+        let d_eff2 = Math.max(d2, d_min);
+        let t2 = Math.max(0, Math.min(1, (d_eff2 - d_min) / (d_max - d_min)));
+        let alpha_right = 0.5 + 0.4 * (1 - t2);
+        let theta_right = theta_max * (1 - t2);
+        let vec2 = { x: dx2, y: dy2 };
+        // For the right side, rotate by -theta_right so that the curve bends oppositely.
+        let rotated2 = rotateVector(vec2, -theta_right);
+        let midEnd = {
+          x: fixedCenter.x + alpha_right * rotated2.x,
+          y: fixedCenter.y + alpha_right * rotated2.y
+        };
+
+        // Build the list of points for the smooth curve:
+        const points = [
+          [start.x, start.y],
+          [midStart.x, midStart.y],
+          [fixedCenter.x, fixedCenter.y],
+          [midEnd.x, midEnd.y],
+          [end.x, end.y]
+        ];
+
+        // Use D3’s line generator with Catmull–Rom interpolation for a continuous smooth curve.
+        const lineGenerator = d3.line()
+          .curve(d3.curveCatmullRom.alpha(0.5));
+        mainPath.attr("d", lineGenerator(points));
+        updateCoordinates();
+      }
+      updatePath();
+
+      // ----------------------------
+      // Drag behavior for the start endpoint
+      // ----------------------------
+      const dragStart = d3.drag()
+        .on("drag", (event) => {
+          startMoved = true;
+          let dx = event.x - fixedCenter.x;
+          let dy = event.y - fixedCenter.y;
+          if (Math.hypot(dx, dy) < snapThreshold) {
+            start.x = fixedCenter.x;
+            start.y = fixedCenter.y;
+          } else {
+            start.x = event.x;
+            start.y = event.y;
+          }
+          d3.select(".start")
+            .attr("cx", start.x)
+            .attr("cy", start.y);
+          updatePath();
+        });
+
+      // ----------------------------
+      // Drag behavior for the end endpoint
+      // ----------------------------
+      const dragEnd = d3.drag()
+        .on("drag", (event) => {
+          endMoved = true;
+          let dx = event.x - fixedCenter.x;
+          let dy = event.y - fixedCenter.y;
+          if (Math.hypot(dx, dy) < snapThreshold) {
+            end.x = fixedCenter.x;
+            end.y = fixedCenter.y;
+          } else {
+            end.x = event.x;
+            end.y = event.y;
+          }
+          d3.select(".end")
+            .attr("cx", end.x)
+            .attr("cy", end.y);
+          updatePath();
+        });
+
+      // ----------------------------
+      // Append draggable circles at the endpoints.
+      // ----------------------------
+      svg.append("circle")
+         .attr("class", "start")
+         .attr("cx", start.x)
+         .attr("cy", start.y)
+         .attr("r", 10)
+         .attr("fill", "transparent")
+         .attr("stroke", "green")
+         .attr("stroke-dasharray", "2,2")
+         .attr("stroke-opacity", 0.5)
+         .style("cursor", "pointer")
+         .call(dragStart);
+
+      svg.append("circle")
+         .attr("class", "end")
+         .attr("cx", end.x)
+         .attr("cy", end.y)
+         .attr("r", 10)
+         .attr("fill", "transparent")
+         .attr("stroke", "red")
+         .attr("stroke-dasharray", "2,2")
+         .attr("stroke-opacity", 0.5)
+         .style("cursor", "pointer")
+         .call(dragEnd);
+
+      // ----------------------------
+      // Handle window resizing
+      // ----------------------------
+      window.addEventListener("resize", () => {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        svg.attr("width", width).attr("height", height);
+        fixedCenter.x = width / 2;
+        fixedCenter.y = height / 2;
+        if (!startMoved) {
+          start.x = basePadding;
+          start.y = height - basePadding;
+          svg.select("circle.start").attr("cx", start.x).attr("cy", start.y);
+        }
+        if (!endMoved) {
+          end.x = width - basePadding;
+          end.y = basePadding;
+          svg.select("circle.end").attr("cx", end.x).attr("cy", end.y);
+        }
+        updatePath();
+      });
+
+      // ----------------------------
+      // Full screen toggle
+      // ----------------------------
+      document.getElementById("fullscreen-btn").addEventListener("click", () => {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen();
+        } else {
+          document.exitFullscreen();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

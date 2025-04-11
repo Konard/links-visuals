@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Elastic Infinity–like Arrow (Improved Multi–Point Spline)</title>
+  <style>
+    html, body {
+      margin: 0; 
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+    svg {
+      display: block;
+    }
+    #fullscreen-btn {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      z-index: 1000;
+      padding: 10px 15px;
+      background: rgba(255,255,255,0.8);
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    /* Debug: display coordinate values */
+    #coordinates {
+      position: fixed;
+      bottom: 10px;
+      left: 10px;
+      z-index: 1000;
+      background: rgba(255,255,255,0.8);
+      padding: 10px;
+      font-family: monospace;
+      font-size: 12px;
+      white-space: pre;
+    }
+  </style>
+</head>
+<body>
+  <button id="fullscreen-btn">Full Screen</button>
+  <div id="coordinates"></div>
+  <!-- Load D3.js library -->
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script>
+    // ------ Global Variables & Parameters ------
+    let width = window.innerWidth;
+    let height = window.innerHeight;
+    const basePadding = 155;
+    const snapThreshold = 20;
+
+    // Fixed center remains at the center of the viewport.
+    const fixedCenter = { x: width / 2, y: height / 2 };
+
+    // Set initial positions for start and end.
+    let start = { x: basePadding, y: height - basePadding };
+    let end = { x: width - basePadding, y: basePadding };
+    let startMoved = false, endMoved = false;
+
+    // ------ Create SVG Canvas ------
+    const svg = d3.select("body").append("svg")
+      .attr("width", width)
+      .attr("height", height);
+
+    // ------ Coordinate Display (for Debug) ------
+    function updateCoordinates() {
+      d3.select("#coordinates").text(
+        `Start:       (${Math.round(start.x)}, ${Math.round(start.y)})\n` +
+        `End:         (${Math.round(end.x)}, ${Math.round(end.y)})\n` +
+        `FixedCenter: (${Math.round(fixedCenter.x)}, ${Math.round(fixedCenter.y)})`
+      );
+    }
+    updateCoordinates();
+
+    // ------ Marker Definitions ------
+    const defs = svg.append("defs");
+
+    // CROSS marker for the start point
+    defs.append("marker")
+      .attr("id", "cross-marker")
+      .attr("viewBox", "0 0 100 100")
+      .attr("markerWidth", 100)
+      .attr("markerHeight", 100)
+      .attr("refX", 50)
+      .attr("refY", 50)
+      .attr("orient", "auto")
+      .append("g")
+      .call(g => {
+        g.append("line")
+          .attr("x1", 50)
+          .attr("y1", 20)
+          .attr("x2", 50)
+          .attr("y2", 80)
+          .attr("stroke", "black");
+      });
+
+    // ARROW marker for the end point
+    defs.append("marker")
+      .attr("id", "arrow-marker")
+      .attr("viewBox", "0 0 100 100")
+      .attr("markerWidth", 100)
+      .attr("markerHeight", 100)
+      .attr("refX", 10)
+      .attr("refY", 50)
+      .attr("orient", "auto")
+      .append("g")
+      .call(g => {
+        g.append("line")
+          .attr("x1", 10)
+          .attr("y1", 50)
+          .attr("x2", 0)
+          .attr("y2", 40)
+          .attr("stroke", "black");
+        g.append("line")
+          .attr("x1", 10)
+          .attr("y1", 50)
+          .attr("x2", 0)
+          .attr("y2", 60)
+          .attr("stroke", "black");
+      });
+
+    // ------ Draggable Endpoints: Start and End ------
+    const dragStart = d3.drag()
+      .on("drag", (event) => {
+        startMoved = true;
+        const dx = event.x - fixedCenter.x, dy = event.y - fixedCenter.y;
+        if (Math.hypot(dx, dy) < snapThreshold) {
+          start.x = fixedCenter.x;
+          start.y = fixedCenter.y;
+        } else {
+          start.x = event.x;
+          start.y = event.y;
+        }
+        startCircle.attr("cx", start.x).attr("cy", start.y);
+        updatePath();
+      });
+
+    const dragEnd = d3.drag()
+      .on("drag", (event) => {
+        endMoved = true;
+        const dx = event.x - fixedCenter.x, dy = event.y - fixedCenter.y;
+        if (Math.hypot(dx, dy) < snapThreshold) {
+          end.x = fixedCenter.x;
+          end.y = fixedCenter.y;
+        } else {
+          end.x = event.x;
+          end.y = event.y;
+        }
+        endCircle.attr("cx", end.x).attr("cy", end.y);
+        updatePath();
+      });
+
+    // Append draggable circles for the start and end points.
+    const startCircle = svg.append("circle")
+      .attr("class", "start")
+      .attr("cx", start.x)
+      .attr("cy", start.y)
+      .attr("r", 10)
+      .attr("fill", "transparent")
+      .attr("stroke", "green")
+      .attr("stroke-dasharray", "2,2")
+      .attr("stroke-opacity", 0.5)
+      .style("cursor", "pointer")
+      .call(dragStart);
+
+    const endCircle = svg.append("circle")
+      .attr("class", "end")
+      .attr("cx", end.x)
+      .attr("cy", end.y)
+      .attr("r", 10)
+      .attr("fill", "transparent")
+      .attr("stroke", "red")
+      .attr("stroke-dasharray", "2,2")
+      .attr("stroke-opacity", 0.5)
+      .style("cursor", "pointer")
+      .call(dragEnd);
+
+    // ------ Create the Main Path Element ------
+    const mainPath = svg.append("path")
+      .attr("fill", "none")
+      .attr("stroke", "black")
+      .attr("stroke-width", 12)
+      .attr("marker-start", "url(#cross-marker)")
+      .attr("marker-end", "url(#arrow-marker)");
+
+    // ------ Compute Elastic Arc Points ------
+    // This function computes an array of points from source to target.
+    // It uses a uniform parameter (t from 0 to 1) and adds a perpendicular offset using a quadratic function.
+    function computeElasticArc(source, target, nPoints, k) {
+      const dx = target.x - source.x;
+      const dy = target.y - source.y;
+      const length = Math.hypot(dx, dy);
+      // Unit vector from source to target.
+      const ux = dx / length;
+      const uy = dy / length;
+      // Perpendicular vector (rotated 90° clockwise).
+      const perp = { x: -uy, y: ux };
+      const points = [];
+      for (let i = 0; i <= nPoints; i++) {
+        const t = i / nPoints;
+        // Linear interpolation.
+        const baseX = source.x + t * dx;
+        const baseY = source.y + t * dy;
+        // Offset magnitude (peak at t = 0.5), scaled by k.
+        const offsetMag = k * 4 * t * (1 - t);
+        const offsetX = perp.x * offsetMag;
+        const offsetY = perp.y * offsetMag;
+        points.push({ x: baseX + offsetX, y: baseY + offsetY });
+      }
+      return points;
+    }
+
+    // ------ Update Path Function ------
+    // Instead of two cubic segments, we now calculate multiple intermediate points
+    // to produce a smooth, elastic (almost circular) arc between start and fixedCenter,
+    // and from fixedCenter to end.
+    function updatePath() {
+      updateCoordinates();
+
+      // Use a fixed number of intermediate points (higher means smoother curve)
+      const nPoints = 20;
+
+      // Calculate a scaling factor "k" for each half;
+      // here we use a fraction of the segment length – you may tune this multiplier.
+      const ds = Math.hypot(fixedCenter.x - start.x, fixedCenter.y - start.y);
+      const de = Math.hypot(end.x - fixedCenter.x, end.y - fixedCenter.y);
+      const k1 = ds * 0.2;
+      const k2 = de * 0.2;
+
+      // Compute points for both halves.
+      const arc1 = computeElasticArc(start, fixedCenter, nPoints, k1);
+      const arc2 = computeElasticArc(fixedCenter, end, nPoints, k2);
+      // Combine the two arcs without duplicating the fixed center.
+      const combinedPoints = arc1.concat(arc2.slice(1));
+
+      // Generate an SVG path using D3's line generator with Catmull–Rom interpolation.
+      const lineGenerator = d3.line()
+        .x(d => d.x)
+        .y(d => d.y)
+        .curve(d3.curveCatmullRom);
+      const pathData = lineGenerator(combinedPoints);
+      mainPath.attr("d", pathData);
+    }
+
+    // ------ Window Resize Handler ------
+    window.addEventListener("resize", () => {
+      width = window.innerWidth;
+      height = window.innerHeight;
+      svg.attr("width", width).attr("height", height);
+      fixedCenter.x = width / 2;
+      fixedCenter.y = height / 2;
+      if (!startMoved) {
+        start.x = basePadding;
+        start.y = height - basePadding;
+        startCircle.attr("cx", start.x).attr("cy", start.y);
+      }
+      if (!endMoved) {
+        end.x = width - basePadding;
+        end.y = basePadding;
+        endCircle.attr("cx", end.x).attr("cy", end.y);
+      }
+      updatePath();
+    });
+
+    // ------ Fullscreen Toggle ------
+    document.getElementById("fullscreen-btn").addEventListener("click", () => {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen();
+      } else {
+        document.exitFullscreen();
+      }
+    });
+
+    // Initial draw.
+    updatePath();
+  </script>
+</body>
+</html>

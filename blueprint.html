@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Link blueprint</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      /* The background is a bright pastel blue */
+      background: #E0F7FA;
+      height: 100%;
+      overflow: hidden;
+    }
+    svg {
+      display: block;
+    }
+    /* Debug info styling */
+    #coordinates {
+      position: fixed;
+      bottom: 10px;
+      left: 10px;
+      background: rgba(0, 0, 128, 0.5); /* dark blue semi-transparent */
+      color: white;
+      padding: 10px;
+      font-family: "Consolas", "Courier New", monospace;
+      font-size: 12px;
+      border-radius: 5px;
+      white-space: pre;
+    }
+  </style>
+</head>
+<body>
+  <div id="coordinates"></div>
+  <script type="module">
+    const { use } = await import("https://esm.sh/use-m");
+    (async () => {
+      const d3 = await use('d3');
+
+      // ------ Constants & Globals ------
+      const basePadding = 155; // leftmost x-coordinate for the default (unmoved) start.
+      const snapThreshold = 20; // in pixels
+      const circleRadius = 24;  // at least twice the main line stroke (12)
+
+      // Global variables that get recalculated on resize:
+      let width = window.innerWidth;
+      let height = window.innerHeight;
+      let cx = width / 2;
+      let cy = height / 2;
+      let gridSpacing = (cx - basePadding) / 4; // full spacing interval
+      let halfSpacing = gridSpacing / 2;         // half spacing
+
+      // ------ Setup SVG & Grid Group ------
+      const svg = d3.select("body")
+                    .append("svg")
+                    .attr("width", width)
+                    .attr("height", height);
+      // Place grid group behind everything.
+      const gridGroup = svg.insert("g", ":first-child");
+
+      // ------ Define control points with relative factors ------
+      // Each point gets an 'initialFactor' representing how many full intervals
+      // away from center it is. (Start: -4, then -3, -2, -1, center: 0, then 1, 2, 3, end: 4)
+      const points = [
+        { id: "start",   initialFactor: -4, x: cx - 4 * gridSpacing, y: cy, type: "endpoint",    draggable: true,  z: 1, moved: false },
+        { id: "p1",      initialFactor: -3, x: cx - 3 * gridSpacing, y: cy, type: "intermediate",draggable: true,  z: 2, moved: false },
+        { id: "p2",      initialFactor: -2, x: cx - 2 * gridSpacing, y: cy, type: "intermediate",draggable: true,  z: 3, moved: false },
+        { id: "p3",      initialFactor: -1, x: cx - 1 * gridSpacing, y: cy, type: "intermediate",draggable: true,  z: 4, moved: false },
+        { id: "center",  initialFactor:  0, x: cx,                 y: cy, type: "center",      draggable: false, z: 0 },
+        { id: "p4",      initialFactor:  1, x: cx + 1 * gridSpacing, y: cy, type: "intermediate",draggable: true,  z: 5, moved: false },
+        { id: "p5",      initialFactor:  2, x: cx + 2 * gridSpacing, y: cy, type: "intermediate",draggable: true,  z: 6, moved: false },
+        { id: "p6",      initialFactor:  3, x: cx + 3 * gridSpacing, y: cy, type: "intermediate",draggable: true,  z: 7, moved: false },
+        { id: "end",     initialFactor:  4, x: cx + 4 * gridSpacing, y: cy, type: "endpoint",    draggable: true,  z: 8, moved: false }
+      ];
+
+      // ------ Draw the grid lines ------
+      function drawGrid() {
+        gridGroup.selectAll("*").remove();
+
+        // --- Minor grid lines (every halfSpacing, excluding those that are major) ---
+        const minorGroup = gridGroup.append("g").attr("class", "minor-grid");
+        const startX_minor = cx + Math.floor((0 - cx) / halfSpacing) * halfSpacing;
+        const endX_minor = cx + Math.ceil((width - cx) / halfSpacing) * halfSpacing;
+        for (let x = startX_minor; x <= endX_minor; x += halfSpacing) {
+          if (Math.abs((x - cx) % gridSpacing) < 0.1) continue; // skip major positions
+          minorGroup.append("line")
+            .attr("x1", x)
+            .attr("y1", 0)
+            .attr("x2", x)
+            .attr("y2", height)
+            .attr("stroke", "white")
+            .attr("stroke-width", 0.5)
+            .attr("opacity", 0.5);
+        }
+        const startY_minor = cy + Math.floor((0 - cy) / halfSpacing) * halfSpacing;
+        const endY_minor = cy + Math.ceil((height - cy) / halfSpacing) * halfSpacing;
+        for (let y = startY_minor; y <= endY_minor; y += halfSpacing) {
+          if (Math.abs((y - cy) % gridSpacing) < 0.1) continue;
+          minorGroup.append("line")
+            .attr("x1", 0)
+            .attr("y1", y)
+            .attr("x2", width)
+            .attr("y2", y)
+            .attr("stroke", "white")
+            .attr("stroke-width", 0.5)
+            .attr("opacity", 0.5);
+        }
+
+        // --- Major grid lines (every full gridSpacing) ---
+        const majorGroup = gridGroup.append("g").attr("class", "major-grid");
+        const startX_major = cx + Math.floor((0 - cx) / gridSpacing) * gridSpacing;
+        const endX_major = cx + Math.ceil((width - cx) / gridSpacing) * gridSpacing;
+        for (let x = startX_major; x <= endX_major; x += gridSpacing) {
+          majorGroup.append("line")
+            .attr("x1", x)
+            .attr("y1", 0)
+            .attr("x2", x)
+            .attr("y2", height)
+            .attr("stroke", "white")
+            .attr("stroke-width", 1)
+            .attr("opacity", 0.8);
+        }
+        const startY_major = cy + Math.floor((0 - cy) / gridSpacing) * gridSpacing;
+        const endY_major = cy + Math.ceil((height - cy) / gridSpacing) * gridSpacing;
+        for (let y = startY_major; y <= endY_major; y += gridSpacing) {
+          majorGroup.append("line")
+            .attr("x1", 0)
+            .attr("y1", y)
+            .attr("x2", width)
+            .attr("y2", y)
+            .attr("stroke", "white")
+            .attr("stroke-width", 1)
+            .attr("opacity", 0.8);
+        }
+      }
+
+      // ------ Debug info formatting functions ------
+      // Format a coordinate as a 4-digit zero-padded string.
+      function formatCoord(n) {
+        let s = Math.round(n).toString();
+        if (s[0] === '-') {
+          return '-' + s.slice(1).padStart(3, '0');
+        } else {
+          return s.padStart(4, '0');
+        }
+      }
+      // Update the debug info panel with aligned text.
+      function updateCoordinates() {
+        const coordsDiv = document.getElementById("coordinates");
+        let lines = points.map(p => {
+          // Pad id to 6 characters.
+          let idStr = p.id.padEnd(6, ' ');
+          // Format coordinate tuple.
+          let coordStr = `(${formatCoord(p.x)}, ${formatCoord(p.y)})`;
+          // Format z value as 4-digit.
+          let zStr = String(p.z).padStart(4, '0');
+          return `${idStr}: ${coordStr}  z=${zStr}`;
+        });
+        coordsDiv.textContent = lines.join("\n");
+      }
+
+      // ------ Marker definitions (for the arrow ends) ------
+      const defs = svg.append("defs");
+      // CROSS marker for the start endpoint.
+      defs.append("marker")
+          .attr("id", "cross-marker")
+          .attr("viewBox", "0 0 100 100")
+          .attr("markerWidth", 100)
+          .attr("markerHeight", 100)
+          .attr("refX", 50)
+          .attr("refY", 50)
+          .attr("orient", "auto")
+        .append("g")
+          .call(g => {
+            g.append("line")
+              .attr("x1", 62.5 - (12.5 - 12.5/1.618))
+              .attr("y1", 25 + 14.5 - 0.23)
+              .attr("x2", 62.5 - (12.5 - 12.5/1.618))
+              .attr("y2", 75 - 14.5 + 0.23)
+              .attr("stroke", "black");
+          });
+      // ARROW marker for the end endpoint.
+      defs.append("marker")
+          .attr("id", "arrow-marker")
+          .attr("viewBox", "0 0 100 100")
+          .attr("markerWidth", 100)
+          .attr("markerHeight", 100)
+          .attr("refX", 10)
+          .attr("refY", 50)
+          .attr("orient", "auto")
+        .append("g")
+          .call(g => {
+            g.append("line")
+              .attr("x1", 10 + 0.35)
+              .attr("y1", 50 + 0.35)
+              .attr("x2", 0 - 0.35)
+              .attr("y2", 40 - 0.35)
+              .attr("stroke", "black");
+            g.append("line")
+              .attr("x1", 10 + 0.35)
+              .attr("y1", 50 - 0.35)
+              .attr("x2", 0 - 0.35)
+              .attr("y2", 60 + 0.35)
+              .attr("stroke", "black");
+          });
+
+      // ------ Create the main path element (the elastic arrow) ------
+      const mainPath = svg.append("path")
+                          .attr("fill", "none")
+                          .attr("stroke", "black")
+                          .attr("stroke-width", 12)
+                          .attr("marker-start", "url(#cross-marker)")
+                          .attr("marker-end", "url(#arrow-marker)");
+
+      // ------ Utility functions for vector math ------
+      function subtract(v, w) { return { x: v.x - w.x, y: v.y - w.y }; }
+      function add(v, w)      { return { x: v.x + w.x, y: v.y + w.y }; }
+      function scale(v, s)    { return { x: v.x * s, y: v.y * s }; }
+
+      // ------ Build a smooth path through all control points (Catmull–Rom conversion) ------
+      function updatePath() {
+        const n = points.length;
+        const tangents = [];
+        for (let i = 0; i < n; i++) {
+          if (i === 0) {
+            tangents[i] = subtract(points[1], points[0]);
+          } else if (i === n - 1) {
+            tangents[i] = subtract(points[n - 1], points[n - 2]);
+          } else {
+            tangents[i] = scale(subtract(points[i + 1], points[i - 1]), 0.5);
+          }
+        }
+        let pathData = `M ${points[0].x} ${points[0].y} `;
+        for (let i = 0; i < n - 1; i++) {
+          const p0 = points[i];
+          const p1 = points[i + 1];
+          const cp1 = add(p0, scale(tangents[i], 1/3));
+          const cp2 = subtract(p1, scale(tangents[i+1], 1/3));
+          pathData += `C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${p1.x} ${p1.y} `;
+        }
+        mainPath.attr("d", pathData);
+        updateCoordinates();
+      }
+      updatePath();
+
+      // ------ Draw control point circles ------
+      // They are drawn with a transparent fill and a dashed border by default.
+      let circles = svg.selectAll("circle.control")
+                       .data(points, d => d.id)
+                       .enter()
+                       .append("circle")
+                       .attr("class", d => "control " + d.id)
+                       .attr("cx", d => d.x)
+                       .attr("cy", d => d.y)
+                       .attr("r", circleRadius)
+                       .attr("fill", "rgba(0,0,0,0)")
+                       .attr("stroke-dasharray", "4,2")
+                       .attr("stroke", d => {
+                         if (d.type === "center") return "black";
+                         if (d.type === "endpoint") return d.id === "start" ? "green" : "red";
+                         return "blue";
+                       });
+
+      // Attach drag behavior: on drag start, remove dash; on drag end, restore dash.
+      circles.filter(d => d.draggable)
+             .call(d3.drag()
+                .on("start", function(event, d) {
+                  d3.select(this).attr("stroke-dasharray", null);
+                })
+                .on("drag", function(event, d) {
+                  // When dragging, snap to nearest half-spacing grid intersection.
+                  const nearestX = cx + Math.round((event.x - cx) / halfSpacing) * halfSpacing;
+                  const nearestY = cy + Math.round((event.y - cy) / halfSpacing) * halfSpacing;
+                  const distToGrid = Math.hypot(event.x - nearestX, event.y - nearestY);
+                  if (distToGrid < snapThreshold) {
+                    d.x = nearestX;
+                    d.y = nearestY;
+                  } else {
+                    d.x = event.x;
+                    d.y = event.y;
+                  }
+                  d.moved = true;
+                  d3.select(this)
+                    .attr("cx", d.x)
+                    .attr("cy", d.y);
+                  updatePath();
+                })
+                .on("end", function(event, d) {
+                  d3.select(this).attr("stroke-dasharray", "4,2");
+                }));
+
+      // ------ Bring circles to front according to their virtual stacking order ------
+      circles.sort((a, b) => a.z - b.z);
+
+      // ------ Resize handling ------
+      function resize() {
+        // Update dimensions.
+        width = window.innerWidth;
+        height = window.innerHeight;
+        cx = width / 2;
+        cy = height / 2;
+        gridSpacing = (cx - basePadding) / 4;
+        halfSpacing = gridSpacing / 2;
+        // Update SVG dimensions.
+        svg.attr("width", width).attr("height", height);
+        // Redraw grid.
+        drawGrid();
+        // For each control point that has not been moved by the user, update to its default position.
+        points.forEach(d => {
+          if (!d.moved || d.type === "center") {
+            d.x = cx + d.initialFactor * gridSpacing;
+            d.y = cy;
+          }
+        });
+        // Update circles positions.
+        circles.data(points)
+               .attr("cx", d => d.x)
+               .attr("cy", d => d.y);
+        // Update main path.
+        updatePath();
+      }
+      window.addEventListener("resize", resize);
+
+    })();
+  </script>
+</body>
+</html>

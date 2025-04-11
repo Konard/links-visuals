@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Elastic Arrow with Four Segments & Aligned Control Points</title>
+  <style>
+    html, body {
+      margin: 0; 
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+    svg { display: block; }
+    #fullscreen-btn {
+      position: fixed;
+      top: 10px; 
+      right: 10px;
+      z-index: 1000;
+      padding: 10px 15px;
+      background: rgba(255,255,255,0.8);
+      border: none; 
+      cursor: pointer;
+      font-size: 14px;
+    }
+    /* Debug coordinates */
+    #coordinates {
+      position: fixed;
+      bottom: 10px;
+      left: 10px;
+      z-index: 1000;
+      background: rgba(255,255,255,0.8);
+      padding: 10px;
+      font-family: monospace;
+      font-size: 12px;
+      white-space: pre;
+    }
+  </style>
+</head>
+<body>
+  <button id="fullscreen-btn">Full Screen</button>
+  <div id="coordinates"></div>
+  <script type="module">
+    const { use } = await import("https://esm.sh/use-m");
+    (async () => {
+      const d3 = await use('d3');
+      
+      // ------ Adjustable parameters ------
+      const basePadding = 155;       // margin for endpoints along x
+      const snapThreshold = 20;      // snap if endpoint nears its fixed neighbor
+      
+      // ------ Set dimensions & fixed points ------
+      let width = window.innerWidth;
+      let height = window.innerHeight;
+      // Choose the horizontal center line by placing all points at y = height/2.
+      const centerY = height / 2;
+      // Fixed intermediate points:
+      const fixedPoint2 = { x: width / 2, y: centerY };        // central (point 2)
+      const fixedPoint1 = { x: width / 4, y: centerY };          // intermediate point 1
+      const fixedPoint3 = { x: 3 * width / 4, y: centerY };      // intermediate point 3
+      
+      // Draggable endpoints, now set to lie on the same horizontal line.
+      let start = { x: basePadding, y: centerY };
+      let end   = { x: width - basePadding, y: centerY };
+      let startMoved = false, endMoved = false;
+      
+      // ------ Create SVG ------
+      const svg = d3.select("body")
+        .append("svg")
+        .attr("width", width)
+        .attr("height", height);
+      
+      // ------ Debug: update coordinates display ------
+      function updateCoordinates() {
+        const coordsDiv = document.getElementById("coordinates");
+        coordsDiv.innerText =
+          `Start:         (${Math.round(start.x)}, ${Math.round(start.y)})
+Fixed Point1:  (${Math.round(fixedPoint1.x)}, ${Math.round(fixedPoint1.y)})
+Fixed Center:  (${Math.round(fixedPoint2.x)}, ${Math.round(fixedPoint2.y)})
+Fixed Point3:  (${Math.round(fixedPoint3.x)}, ${Math.round(fixedPoint3.y)})
+End:           (${Math.round(end.x)}, ${Math.round(end.y)})`;
+      }
+      updateCoordinates();
+      
+      // ------ Marker definitions ------
+      const defs = svg.append("defs");
+      
+      // CROSS marker for start
+      defs.append("marker")
+          .attr("id", "cross-marker")
+          .attr("viewBox", "0 0 100 100")
+          .attr("markerWidth", 100)
+          .attr("markerHeight", 100)
+          .attr("refX", 50)
+          .attr("refY", 50)
+          .attr("orient", "auto")
+        .append("g")
+          .call(g => {
+            g.append("line")
+              .attr("x1", 62.5 - (12.5 - 12.5/1.618))
+              .attr("y1", 25 + 14.5 - 0.23)
+              .attr("x2", 62.5 - (12.5 - 12.5/1.618))
+              .attr("y2", 75 - 14.5 + 0.23)
+              .attr("stroke", "black");
+          });
+      
+      // ARROW marker for end
+      defs.append("marker")
+          .attr("id", "arrow-marker")
+          .attr("viewBox", "0 0 100 100")
+          .attr("markerWidth", 100)
+          .attr("markerHeight", 100)
+          .attr("refX", 10)
+          .attr("refY", 50)
+          .attr("orient", "auto")
+        .append("g")
+          .call(g => {
+            // Upper arrow line
+            g.append("line")
+              .attr("x1", 10 + 0.35)
+              .attr("y1", 50 + 0.35)
+              .attr("x2", 0 - 0.35)
+              .attr("y2", 40 - 0.35)
+              .attr("stroke", "black");
+            // Lower arrow line
+            g.append("line")
+              .attr("x1", 10 + 0.35)
+              .attr("y1", 50 - 0.35)
+              .attr("x2", 0 - 0.35)
+              .attr("y2", 60 + 0.35)
+              .attr("stroke", "black");
+          });
+      
+      // ------ Utility functions for vector math ------
+      function add(v, w) {
+        return { x: v.x + w.x, y: v.y + w.y };
+      }
+      function subtract(v, w) {
+        return { x: v.x - w.x, y: v.y - w.y };
+      }
+      function scale(v, s) {
+        return { x: v.x * s, y: v.y * s };
+      }
+      
+      // ------ Build a smooth path through five points (S, F1, F2, F3, E) ------
+      // We use a Catmull-Rom–style tangent derivation converted to cubic Bézier form.
+      function updatePath() {
+        // Our key points:
+        const P0 = start;
+        const P1 = fixedPoint1;
+        const P2 = fixedPoint2;
+        const P3 = fixedPoint3;
+        const P4 = end;
+        
+        // Compute tangents.
+        // For the endpoints we use a simple forward/backward difference.
+        const T0 = subtract(P1, P0);
+        const T1 = scale(subtract(P2, P0), 0.5);
+        const T2 = scale(subtract(P3, P1), 0.5);
+        const T3 = scale(subtract(P4, P2), 0.5);
+        const T4 = subtract(P4, P3);
+        
+        // For each segment, the control points come from 1/3 of the tangent.
+        // Segment A: from P0 (start) to P1 (F1)
+        const CP_A1 = add(P0, scale(T0, 1/3));
+        const CP_A2 = subtract(P1, scale(T1, 1/3));
+        // Segment B: from P1 to P2 (central fixed point)
+        const CP_B1 = add(P1, scale(T1, 1/3));
+        const CP_B2 = subtract(P2, scale(T2, 1/3));
+        // Segment C: from P2 to P3 (F3’s neighbor)
+        const CP_C1 = add(P2, scale(T2, 1/3));
+        const CP_C2 = subtract(P3, scale(T3, 1/3));
+        // Segment D: from P3 to P4 (end)
+        const CP_D1 = add(P3, scale(T3, 1/3));
+        const CP_D2 = subtract(P4, scale(T4, 1/3));
+        
+        // Construct the full path with four cubic Bézier segments.
+        const pathData = 
+          `M ${P0.x} ${P0.y} ` +
+          `C ${CP_A1.x} ${CP_A1.y}, ${CP_A2.x} ${CP_A2.y}, ${P1.x} ${P1.y} ` +
+          `C ${CP_B1.x} ${CP_B1.y}, ${CP_B2.x} ${CP_B2.y}, ${P2.x} ${P2.y} ` +
+          `C ${CP_C1.x} ${CP_C1.y}, ${CP_C2.x} ${CP_C2.y}, ${P3.x} ${P3.y} ` +
+          `C ${CP_D1.x} ${CP_D1.y}, ${CP_D2.x} ${CP_D2.y}, ${P4.x} ${P4.y}`;
+        mainPath.attr("d", pathData);
+        updateCoordinates();
+      }
+      
+      // ------ Create the main path element ------
+      const mainPath = svg.append("path")
+         .attr("fill", "none")
+         .attr("stroke", "black")
+         .attr("stroke-width", 12)
+         .attr("marker-start", "url(#cross-marker)")
+         .attr("marker-end", "url(#arrow-marker)");
+      updatePath();
+      
+      // ------ Drag behaviors for endpoints ------
+      // For the start, we “snap” it to fixedPoint1 if dragged very close.
+      const dragStart = d3.drag()
+        .on("drag", (event) => {
+          startMoved = true;
+          const dx = event.x - fixedPoint1.x;
+          const dy = event.y - fixedPoint1.y;
+          if (Math.hypot(dx, dy) < snapThreshold) {
+            start.x = fixedPoint1.x;
+            start.y = fixedPoint1.y;
+          } else {
+            start.x = event.x;
+            start.y = event.y;
+          }
+          d3.select(".start")
+            .attr("cx", start.x)
+            .attr("cy", start.y);
+          updatePath();
+        });
+      
+      // For the end, we snap it to fixedPoint3 if dragged near it.
+      const dragEnd = d3.drag()
+        .on("drag", (event) => {
+          endMoved = true;
+          const dx = event.x - fixedPoint3.x;
+          const dy = event.y - fixedPoint3.y;
+          if (Math.hypot(dx, dy) < snapThreshold) {
+            end.x = fixedPoint3.x;
+            end.y = fixedPoint3.y;
+          } else {
+            end.x = event.x;
+            end.y = event.y;
+          }
+          d3.select(".end")
+            .attr("cx", end.x)
+            .attr("cy", end.y);
+          updatePath();
+        });
+      
+      // ------ Append draggable endpoint circles ------
+      svg.append("circle")
+         .attr("class", "start")
+         .attr("cx", start.x)
+         .attr("cy", start.y)
+         .attr("r", 10)
+         .attr("fill", "transparent")
+         .attr("stroke", "green")
+         .attr("stroke-dasharray", "2,2")
+         .attr("stroke-opacity", 0.5)
+         .style("cursor", "pointer")
+         .call(dragStart);
+      
+      svg.append("circle")
+         .attr("class", "end")
+         .attr("cx", end.x)
+         .attr("cy", end.y)
+         .attr("r", 10)
+         .attr("fill", "transparent")
+         .attr("stroke", "red")
+         .attr("stroke-dasharray", "2,2")
+         .attr("stroke-opacity", 0.5)
+         .style("cursor", "pointer")
+         .call(dragEnd);
+      
+      // ------ Update on window resize ------
+      window.addEventListener("resize", () => {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        const newCenterY = height/2;
+        svg.attr("width", width).attr("height", height);
+        // Update fixed points based on new dimensions.
+        fixedPoint2.x = width / 2;
+        fixedPoint2.y = newCenterY;
+        fixedPoint1.x = width / 4;
+        fixedPoint1.y = newCenterY;
+        fixedPoint3.x = 3 * width / 4;
+        fixedPoint3.y = newCenterY;
+        if (!startMoved) {
+          start.x = basePadding;
+          start.y = newCenterY;
+          svg.select("circle.start").attr("cx", start.x).attr("cy", start.y);
+        }
+        if (!endMoved) {
+          end.x = width - basePadding;
+          end.y = newCenterY;
+          svg.select("circle.end").attr("cx", end.x).attr("cy", end.y);
+        }
+        updatePath();
+      });
+      
+      // ------ Full screen toggle ------
+      document.getElementById("fullscreen-btn").addEventListener("click", () => {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen();
+        } else {
+          document.exitFullscreen();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

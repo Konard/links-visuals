@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Elastic Infinity Arrow with Smooth Segments</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+    svg { display: block; }
+    #fullscreen-btn {
+      position: fixed; top: 10px; right: 10px; z-index: 1000;
+      padding: 10px 15px; background: rgba(255,255,255,0.8); border: none; cursor: pointer;
+    }
+    #coordinates {
+      position: fixed; bottom: 10px; left: 10px; z-index: 1000;
+      background: rgba(255,255,255,0.8); padding: 10px;
+      font-family: monospace; font-size: 12px; white-space: pre;
+    }
+  </style>
+</head>
+<body>
+  <button id="fullscreen-btn">Full Screen</button>
+  <div id="coordinates"></div>
+  <script type="module">
+    const { use } = await import("https://esm.sh/use-m");
+    (async () => {
+      const d3 = await use('d3');
+      
+      // Configuration
+      const basePadding = 155;
+      const snapThreshold = 20;
+      const segmentsPerSide = 3; // Number of segments per half
+      const d_min = 50;
+      const d_max = 500;
+      const theta_max = Math.PI/3;
+      
+      let width = window.innerWidth;
+      let height = window.innerHeight;
+      const fixedCenter = { x: width/2, y: height/2 };
+      
+      const svg = d3.select("body")
+        .append("svg")
+        .attr("width", width)
+        .attr("height", height);
+      
+      let start = { x: basePadding, y: height - basePadding };
+      let end = { x: width - basePadding, y: basePadding };
+      let startMoved = false, endMoved = false;
+
+      function updateCoordinates() {
+        document.getElementById("coordinates").innerText =
+          `Start: (${Math.round(start.x)}, ${Math.round(start.y)})
+End:   (${Math.round(end.x)}, ${Math.round(end.y)})
+Center: (${fixedCenter.x}, ${fixedCenter.y})`;
+      }
+
+      // Marker definitions (same as before)
+      const defs = svg.append("defs");
+      // [Include the same cross and arrow marker definitions from original code]
+
+      // Mathematical functions
+      const lerp = (a, b, t) => a + t * (b - a);
+      const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+      const normalize = v => {
+        const mag = Math.hypot(v.x, v.y);
+        return mag > 0 ? { x: v.x/mag, y: v.y/mag } : { x: 0, y: 0 };
+      };
+      const rotate = (v, a) => ({
+        x: v.x * Math.cos(a) - v.y * Math.sin(a),
+        y: v.x * Math.sin(a) + v.y * Math.cos(a)
+      });
+
+      function calculateControlPoints(from, to, isStartSide = true) {
+        const vec = { x: to.x - from.x, y: to.y - from.y };
+        const distance = Math.hypot(vec.x, vec.y);
+        const t = clamp((distance - d_min) / (d_max - d_min), 0, 1);
+        const theta = theta_max * (1 - t);
+        
+        const baseDir = normalize(vec);
+        const perpDir = isStartSide ? rotate(baseDir, theta) : rotate(baseDir, -theta);
+        
+        const cp1 = {
+          x: from.x + perpDir.x * distance * 0.4,
+          y: from.y + perpDir.y * distance * 0.4
+        };
+        
+        const cp2 = {
+          x: to.x - perpDir.x * distance * 0.4,
+          y: to.y - perpDir.y * distance * 0.4
+        };
+        
+        return { cp1, cp2 };
+      }
+
+      function updatePath() {
+        const pathSegments = [];
+        
+        // Start to center with multiple segments
+        let prevPoint = start;
+        for(let i = 1; i <= segmentsPerSide; i++) {
+          const t = i/segmentsPerSide;
+          const intermediate = {
+            x: lerp(start.x, fixedCenter.x, t),
+            y: lerp(start.y, fixedCenter.y, t)
+          };
+          const { cp1, cp2 } = calculateControlPoints(prevPoint, intermediate, true);
+          pathSegments.push(`C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${intermediate.x} ${intermediate.y}`);
+          prevPoint = intermediate;
+        }
+        
+        // Center to end with multiple segments
+        for(let i = 1; i <= segmentsPerSide; i++) {
+          const t = i/segmentsPerSide;
+          const intermediate = {
+            x: lerp(fixedCenter.x, end.x, t),
+            y: lerp(fixedCenter.y, end.y, t)
+          };
+          const { cp1, cp2 } = calculateControlPoints(prevPoint, intermediate, false);
+          pathSegments.push(`C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${intermediate.x} ${intermediate.y}`);
+          prevPoint = intermediate;
+        }
+        
+        mainPath.attr("d", `M ${start.x} ${start.y} ` + pathSegments.join(" "));
+        updateCoordinates();
+      }
+
+      const mainPath = svg.append("path")
+        .attr("fill", "none")
+        .attr("stroke", "black")
+        .attr("stroke-width", 12)
+        .attr("marker-start", "url(#cross-marker)")
+        .attr("marker-end", "url(#arrow-marker)");
+      updatePath();
+
+      // Drag behaviors and UI elements (same as original)
+      // [Include the same drag handlers, circles, resize handler, and fullscreen code]
+
+    })();
+  </script>
+</body>
+</html>

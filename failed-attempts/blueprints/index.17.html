@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Elastic Infinity–like Arrow with Fixed Center</title>
+  <style>
+    html, body {
+      margin: 0; padding: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+    svg { display: block; }
+    #fullscreen-btn {
+      position: fixed;
+      top: 10px; right: 10px;
+      z-index: 1000;
+      padding: 10px 15px;
+      background: rgba(255,255,255,0.8);
+      border: none; cursor: pointer;
+      font-size: 14px;
+    }
+    #coordinates {
+      position: fixed;
+      bottom: 10px;
+      left: 10px;
+      z-index: 1000;
+      background: rgba(255,255,255,0.8);
+      padding: 10px;
+      font-family: monospace;
+      font-size: 12px;
+      white-space: pre;
+    }
+  </style>
+</head>
+<body>
+  <button id="fullscreen-btn">Full Screen</button>
+  <div id="coordinates"></div>
+  <script type="module">
+    const { use } = await import("https://esm.sh/use-m");
+    (async () => {
+      const d3 = await use('d3');
+
+      // ------ Adjustable parameters ------
+      const basePadding = 155;       // Initial margin for endpoints
+      const snapThreshold = 20;      // Snap if endpoint is within this range of fixedCenter
+      const d_min = 50;              // Minimum distance to avoid collapse
+      const d_max = 500;             // Distance where curve becomes nearly straight
+      const theta_max = Math.PI / 2; // Maximum rotation (90°) when near center
+      const offset_distance = 50;    // Fixed offset for control points
+
+      // ------ Set dimensions & fixed center ------
+      let width = window.innerWidth;
+      let height = window.innerHeight;
+      const fixedCenter = { x: width / 2, y: height / 2 };
+
+      // ------ Create SVG ------
+      const svg = d3.select("body")
+        .append("svg")
+        .attr("width", width)
+        .attr("height", height);
+
+      // ------ Define endpoints (draggable) ------
+      let start = { x: basePadding, y: height - basePadding };
+      let end = { x: width - basePadding, y: basePadding };
+      let startMoved = false, endMoved = false;
+
+      // ------ Debug: update coordinates display ------
+      function updateCoordinates() {
+        const coordsDiv = document.getElementById("coordinates");
+        coordsDiv.innerText =
+          `Start:       (${Math.round(start.x)}, ${Math.round(start.y)})
+End:         (${Math.round(end.x)}, ${Math.round(end.y)})
+FixedCenter: (${Math.round(fixedCenter.x)}, ${Math.round(fixedCenter.y)})`;
+      }
+      updateCoordinates();
+
+      // ------ Marker definitions ------
+      const defs = svg.append("defs");
+
+      // CROSS marker for start
+      defs.append("marker")
+        .attr("id", "cross-marker")
+        .attr("viewBox", "0 0 100 100")
+        .attr("markerWidth", 100)
+        .attr("markerHeight", 100)
+        .attr("refX", 50)
+        .attr("refY", 50)
+        .attr("orient", "auto")
+        .append("g")
+        .call(g => {
+          g.append("line")
+            .attr("x1", 62.5 - (12.5 - 12.5 / 1.618))
+            .attr("y1", 25 + 14.5 - 0.23)
+            .attr("x2", 62.5 - (12.5 - 12.5 / 1.618))
+            .attr("y2", 75 - 14.5 + 0.23)
+            .attr("stroke", "black");
+        });
+
+      // ARROW marker for end
+      defs.append("marker")
+        .attr("id", "arrow-marker")
+        .attr("viewBox", "0 0 100 100")
+        .attr("markerWidth", 100)
+        .attr("markerHeight", 100)
+        .attr("refX", 10)
+        .attr("refY", 50)
+        .attr("orient", "auto")
+        .append("g")
+        .call(g => {
+          g.append("line")
+            .attr("x1", 10 + 0.35)
+            .attr("y1", 50 + 0.35)
+            .attr("x2", 0 - 0.35)
+            .attr("y2", 40 - 0.35)
+            .attr("stroke", "black");
+          g.append("line")
+            .attr("x1", 10 + 0.35)
+            .attr("y1", 50 - 0.35)
+            .attr("x2", 0 - 0.35)
+            .attr("y2", 60 + 0.35)
+            .attr("stroke", "black");
+        });
+
+      // ------ Utility functions ------
+      function clamp(val, min, max) {
+        return Math.max(min, Math.min(val, max));
+      }
+      function lerp(a, b, t) {
+        return a * (1 - t) + b * t;
+      }
+      function normalize(v) {
+        const mag = Math.hypot(v.x, v.y);
+        return mag === 0 ? { x: 0, y: 0 } : { x: v.x / mag, y: v.y / mag };
+      }
+      function rotateVector(v, angle) {
+        return {
+          x: v.x * Math.cos(angle) - v.y * Math.sin(angle),
+          y: v.x * Math.sin(angle) + v.y * Math.cos(angle)
+        };
+      }
+
+      // ------ Update path: Six cubic segments ------
+      function updatePath() {
+        // Compute actual distances
+        const L_actual_s = Math.hypot(fixedCenter.x - start.x, fixedCenter.y - start.y);
+        const L_actual_e = Math.hypot(end.x - fixedCenter.x, end.y - fixedCenter.y);
+
+        // Interpolation parameters based on actual distance
+        const t_s = clamp((L_actual_s - snapThreshold) / (d_max - snapThreshold), 0, 1);
+        const t_e = clamp((L_actual_e - snapThreshold) / (d_max - snapThreshold), 0, 1);
+        const theta_s = theta_max * (1 - t_s);
+        const theta_e = theta_max * (1 - t_e);
+
+        // Normalized direction vectors
+        const vecStart = { x: fixedCenter.x - start.x, y: fixedCenter.y - start.y };
+        const L_s = Math.max(L_actual_s, d_min);
+        const n_start = normalize(vecStart);
+
+        const vecEnd = { x: end.x - fixedCenter.x, y: end.y - fixedCenter.y };
+        const L_e = Math.max(L_actual_e, d_min);
+        const n_end = normalize(vecEnd);
+
+        // Rotated vectors for curvature
+        const rotated_n_start = rotateVector(n_start, theta_s);
+        const rotated_n_end = rotateVector(n_end, -theta_e);
+
+        // Define join points (J1, J2 between start and center; J3, J4 between center and end)
+        // Position them at 1/3 and 2/3 along a curved path, offset perpendicularly
+        const J1 = {
+          x: lerp(start.x, fixedCenter.x, 1 / 3) + offset_distance * rotated_n_start.x,
+          y: lerp(start.y, fixedCenter.y, 1 / 3) + offset_distance * rotated_n_start.y
+        };
+        const J2 = {
+          x: lerp(start.x, fixedCenter.x, 2 / 3) + offset_distance * rotated_n_start.x,
+          y: lerp(start.y, fixedCenter.y, 2 / 3) + offset_distance * rotated_n_start.y
+        };
+        const J3 = {
+          x: lerp(fixedCenter.x, end.x, 1 / 3) + offset_distance * rotated_n_end.x,
+          y: lerp(fixedCenter.y, end.y, 1 / 3) + offset_distance * rotated_n_end.y
+        };
+        const J4 = {
+          x: lerp(fixedCenter.x, end.x, 2 / 3) + offset_distance * rotated_n_end.x,
+          y: lerp(fixedCenter.y, end.y, 2 / 3) + offset_distance * rotated_n_end.y
+        };
+
+        // Control points for first segment (start to J1)
+        const P1 = {
+          x: start.x + (offset_distance / 2) * rotated_n_start.x,
+          y: start.y + (offset_distance / 2) * rotated_n_start.y
+        };
+        const P2 = {
+          x: J1.x - (offset_distance / 2) * rotated_n_start.x,
+          y: J1.y - (offset_distance / 2) * rotated_n_start.y
+        };
+
+        // Control points for second segment (J1 to J2)
+        const P3 = {
+          x: J1.x + (offset_distance / 2) * rotated_n_start.x,
+          y: J1.y + (offset_distance / 2) * rotated_n_start.y
+        };
+        const P4 = {
+          x: J2.x - (offset_distance / 2) * rotated_n_start.x,
+          y: J2.y - (offset_distance / 2) * rotated_n_start.y
+        };
+
+        // Control points for third segment (J2 to fixedCenter)
+        const P5 = {
+          x: J2.x + (offset_distance / 2) * rotated_n_start.x,
+          y: J2.y + (offset_distance / 2) * rotated_n_start.y
+        };
+        const t_mid = (t_s + t_e) / 2;
+        const L_mid = lerp(0.4, 0.1, t_mid);
+        const v_mid = {
+          x: L_mid * (L_s * rotated_n_start.x + L_e * rotated_n_end.x) / 2,
+          y: L_mid * (L_s * rotated_n_start.y + L_e * rotated_n_end.y) / 2
+        };
+        const P6 = { x: fixedCenter.x - v_mid.x, y: fixedCenter.y - v_mid.y };
+
+        // Control points for fourth segment (fixedCenter to J3)
+        const Q1 = { x: fixedCenter.x + v_mid.x, y: fixedCenter.y + v_mid.y };
+        const Q2 = {
+          x: J3.x - (offset_distance / 2) * rotated_n_end.x,
+          y: J3.y - (offset_distance / 2) * rotated_n_end.y
+        };
+
+        // Control points for fifth segment (J3 to J4)
+        const Q3 = {
+          x: J3.x + (offset_distance / 2) * rotated_n_end.x,
+          y: J3.y + (offset_distance / 2) * rotated_n_end.y
+        };
+        const Q4 = {
+          x: J4.x - (offset_distance / 2) * rotated_n_end.x,
+          y: J4.y - (offset_distance / 2) * rotated_n_end.y
+        };
+
+        // Control points for sixth segment (J4 to end)
+        const Q5 = {
+          x: J4.x + (offset_distance / 2) * rotated_n_end.x,
+          y: J4.y + (offset_distance / 2) * rotated_n_end.y
+        };
+        const Q6 = {
+          x: end.x - (offset_distance / 2) * rotated_n_end.x,
+          y: end.y - (offset_distance / 2) * rotated_n_end.y
+        };
+
+        // Build path data with six cubic Bézier segments
+        const pathData =
+          `M ${start.x} ${start.y} ` +
+          `C ${P1.x} ${P1.y}, ${P2.x} ${P2.y}, ${J1.x} ${J1.y} ` +
+          `C ${P3.x} ${P3.y}, ${P4.x} ${P4.y}, ${J2.x} ${J2.y} ` +
+          `C ${P5.x} ${P5.y}, ${P6.x} ${P6.y}, ${fixedCenter.x} ${fixedCenter.y} ` +
+          `C ${Q1.x} ${Q1.y}, ${Q2.x} ${Q2.y}, ${J3.x} ${J3.y} ` +
+          `C ${Q3.x} ${Q3.y}, ${Q4.x} ${Q4.y}, ${J4.x} ${J4.y} ` +
+          `C ${Q5.x} ${Q5.y}, ${Q6.x} ${Q6.y}, ${end.x} ${end.y}`;
+
+        mainPath.attr("d", pathData);
+        updateCoordinates();
+      }
+
+      // ------ Create the main path ------
+      const mainPath = svg.append("path")
+        .attr("fill", "none")
+        .attr("stroke", "black")
+        .attr("stroke-width", 12)
+        .attr("marker-start", "url(#cross-marker)")
+        .attr("marker-end", "url(#arrow-marker)");
+      updatePath();
+
+      // ------ Drag behaviors ------
+      const dragStart = d3.drag()
+        .on("drag", (event) => {
+          startMoved = true;
+          const dx = event.x - fixedCenter.x;
+          const dy = event.y - fixedCenter.y;
+          if (Math.hypot(dx, dy) < snapThreshold) {
+            start.x = fixedCenter.x;
+            start.y = fixedCenter.y;
+          } else {
+            start.x = event.x;
+            start.y = event.y;
+          }
+          d3.select(".start")
+            .attr("cx", start.x)
+            .attr("cy", start.y);
+          updatePath();
+        });
+
+      const dragEnd = d3.drag()
+        .on("drag", (event) => {
+          endMoved = true;
+          const dx = event.x - fixedCenter.x;
+          const dy = event.y - fixedCenter.y;
+          if (Math.hypot(dx, dy) < snapThreshold) {
+            end.x = fixedCenter.x;
+            end.y = fixedCenter.y;
+          } else {
+            end.x = event.x;
+            end.y = event.y;
+          }
+          d3.select(".end")
+            .attr("cx", end.x)
+            .attr("cy", end.y);
+          updatePath();
+        });
+
+      // ------ Append draggable endpoint circles ------
+      svg.append("circle")
+        .attr("class", "start")
+        .attr("cx", start.x)
+        .attr("cy", start.y)
+        .attr("r", 10)
+        .attr("fill", "transparent")
+        .attr("stroke", "green")
+        .attr("stroke-dasharray", "2,2")
+        .attr("stroke-opacity", 0.5)
+        .style("cursor", "pointer")
+        .call(dragStart);
+
+      svg.append("circle")
+        .attr("class", "end")
+        .attr("cx", end.x)
+        .attr("cy", end.y)
+        .attr("r", 10)
+        .attr("fill", "transparent")
+        .attr("stroke", "red")
+        .attr("stroke-dasharray", "2,2")
+        .attr("stroke-opacity", 0.5)
+        .style("cursor", "pointer")
+        .call(dragEnd);
+
+      // ------ Update on window resize ------
+      window.addEventListener("resize", () => {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        svg.attr("width", width).attr("height", height);
+        fixedCenter.x = width / 2;
+        fixedCenter.y = height / 2;
+        if (!startMoved) {
+          start.x = basePadding;
+          start.y = height - basePadding;
+          svg.select("circle.start").attr("cx", start.x).attr("cy", start.y);
+        }
+        if (!endMoved) {
+          end.x = width - basePadding;
+          end.y = basePadding;
+          svg.select("circle.end").attr("cx", end.x).attr("cy", end.y);
+        }
+        updatePath();
+      });
+
+      // ------ Full screen toggle ------
+      document.getElementById("fullscreen-btn").addEventListener("click", () => {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen();
+        } else {
+          document.exitFullscreen();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

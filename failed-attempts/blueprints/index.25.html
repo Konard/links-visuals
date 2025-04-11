@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Elastic Arrow with 2 Intermediate Points on Each Side</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+    svg {
+      display: block;
+    }
+    /* Debug coordinates */
+    #coordinates {
+      position: fixed;
+      bottom: 10px;
+      left: 10px;
+      background: rgba(255, 255, 255, 0.8);
+      padding: 10px;
+      font-family: monospace;
+      font-size: 12px;
+      white-space: pre;
+    }
+  </style>
+</head>
+<body>
+  <div id="coordinates"></div>
+  <script type="module">
+    const { use } = await import("https://esm.sh/use-m");
+    (async () => {
+      const d3 = await use('d3');
+
+      // ------ Adjustable parameters ------
+      const basePadding = 155;   // horizontal margin for endpoints
+      const snapThreshold = 20;  // endpoints snap to center if within this distance
+
+      // ------ Set dimensions ------
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      const centerY = height / 2;
+
+      // ------ Define control points array ------
+      // Points are ordered from start to end:
+      // [Start, left intermediate 1, left intermediate 2, Center, right intermediate 1, right intermediate 2, End]
+      const points = [
+        { id: "start", x: basePadding, y: centerY, type: "endpoint", draggable: true },
+        // Equally spaced between start and center:
+        { id: "p1", x: basePadding + ((width/2 - basePadding) / 3), y: centerY, type: "intermediate", draggable: true },
+        { id: "p2", x: basePadding + 2 * ((width/2 - basePadding) / 3), y: centerY, type: "intermediate", draggable: true },
+        { id: "center", x: width/2, y: centerY, type: "center", draggable: false },
+        // Equally spaced between center and end:
+        { id: "p3", x: width/2 + ((width - basePadding - width/2) / 3), y: centerY, type: "intermediate", draggable: true },
+        { id: "p4", x: width/2 + 2 * ((width - basePadding - width/2) / 3), y: centerY, type: "intermediate", draggable: true },
+        { id: "end", x: width - basePadding, y: centerY, type: "endpoint", draggable: true }
+      ];
+
+      // ------ Create SVG container ------
+      const svg = d3.select("body")
+        .append("svg")
+        .attr("width", width)
+        .attr("height", height);
+
+      // ------ Debug: update coordinates display ------
+      function updateCoordinates() {
+        const coordsDiv = document.getElementById("coordinates");
+        let text = "";
+        points.forEach(p => {
+          text += `${p.id}: (${Math.round(p.x)}, ${Math.round(p.y)})\n`;
+        });
+        coordsDiv.innerText = text;
+      }
+      updateCoordinates();
+
+      // ------ Marker definitions (for arrow and cross) ------
+      const defs = svg.append("defs");
+
+      // CROSS marker for the start
+      defs.append("marker")
+          .attr("id", "cross-marker")
+          .attr("viewBox", "0 0 100 100")
+          .attr("markerWidth", 100)
+          .attr("markerHeight", 100)
+          .attr("refX", 50)
+          .attr("refY", 50)
+          .attr("orient", "auto")
+        .append("g")
+          .call(g => {
+            g.append("line")
+              .attr("x1", 62.5 - (12.5 - 12.5/1.618))
+              .attr("y1", 25 + 14.5 - 0.23)
+              .attr("x2", 62.5 - (12.5 - 12.5/1.618))
+              .attr("y2", 75 - 14.5 + 0.23)
+              .attr("stroke", "black");
+          });
+
+      // ARROW marker for the end
+      defs.append("marker")
+          .attr("id", "arrow-marker")
+          .attr("viewBox", "0 0 100 100")
+          .attr("markerWidth", 100)
+          .attr("markerHeight", 100)
+          .attr("refX", 10)
+          .attr("refY", 50)
+          .attr("orient", "auto")
+        .append("g")
+          .call(g => {
+            g.append("line")
+              .attr("x1", 10 + 0.35)
+              .attr("y1", 50 + 0.35)
+              .attr("x2", 0 - 0.35)
+              .attr("y2", 40 - 0.35)
+              .attr("stroke", "black");
+            g.append("line")
+              .attr("x1", 10 + 0.35)
+              .attr("y1", 50 - 0.35)
+              .attr("x2", 0 - 0.35)
+              .attr("y2", 60 + 0.35)
+              .attr("stroke", "black");
+          });
+
+      // ------ Create the main path element ------
+      const mainPath = svg.append("path")
+         .attr("fill", "none")
+         .attr("stroke", "black")
+         .attr("stroke-width", 12)
+         .attr("marker-start", "url(#cross-marker)")
+         .attr("marker-end", "url(#arrow-marker)");
+
+      // ------ Utility functions for vector math ------
+      function subtract(v, w) {
+        return { x: v.x - w.x, y: v.y - w.y };
+      }
+      function add(v, w) {
+        return { x: v.x + w.x, y: v.y + w.y };
+      }
+      function scale(v, s) {
+        return { x: v.x * s, y: v.y * s };
+      }
+
+      // ------ Build a smooth path through all control points ------
+      // Uses a Catmull–Rom spline conversion to cubic Bézier segments.
+      // For n points there are n-1 segments.
+      function updatePath() {
+        const n = points.length;
+        const tangents = [];
+        for (let i = 0; i < n; i++) {
+          if (i === 0) {
+            tangents[i] = subtract(points[1], points[0]);
+          } else if (i === n - 1) {
+            tangents[i] = subtract(points[n - 1], points[n - 2]);
+          } else {
+            tangents[i] = scale(subtract(points[i + 1], points[i - 1]), 0.5);
+          }
+        }
+        let pathData = `M ${points[0].x} ${points[0].y} `;
+        for (let i = 0; i < n - 1; i++) {
+          const p0 = points[i];
+          const p1 = points[i + 1];
+          const cp1 = add(p0, scale(tangents[i], 1/3));
+          const cp2 = subtract(p1, scale(tangents[i+1], 1/3));
+          pathData += `C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${p1.x} ${p1.y} `;
+        }
+        mainPath.attr("d", pathData);
+        updateCoordinates();
+      }
+      updatePath();
+
+      // ------ Create and attach draggable circles for control points ------
+      // This deduplicates repeated code by using a data join.
+      const circles = svg.selectAll("circle")
+        .data(points)
+        .enter()
+        .append("circle")
+        .attr("class", d => d.id)
+        .attr("cx", d => d.x)
+        .attr("cy", d => d.y)
+        .attr("r", d => d.type === "endpoint" ? 10 : 8)
+        .attr("fill", d => {
+          if (d.type === "center") return "black";
+          if (d.type === "endpoint") return d.id === "start" ? "green" : "red";
+          return "lightblue";
+        })
+        .attr("stroke", d => d.type === "center" ? "none" : (d.type === "endpoint" ? (d.id === "start" ? "green" : "red") : "blue"))
+        .attr("stroke-dasharray", d => d.type === "endpoint" ? "2,2" : null)
+        .attr("stroke-opacity", d => d.type === "endpoint" ? 0.5 : 1)
+        .style("cursor", d => d.draggable ? "pointer" : "default");
+
+      // Attach drag behavior only for draggable points.
+      circles.filter(d => d.draggable)
+        .call(d3.drag()
+          .on("drag", function(event, d) {
+            if(d.type === "endpoint") {
+              // Endpoints snap to the center if within snapThreshold.
+              const center = points.find(pt => pt.id === "center");
+              const dx = event.x - center.x;
+              const dy = event.y - center.y;
+              if(Math.hypot(dx, dy) < snapThreshold) {
+                d.x = center.x;
+                d.y = center.y;
+              } else {
+                d.x = event.x;
+                d.y = event.y;
+              }
+            } else if(d.type === "intermediate") {
+              // Simply update intermediate point coordinates.
+              d.x = event.x;
+              d.y = event.y;
+            }
+            // Update the position of the dragged circle.
+            d3.select(this)
+              .attr("cx", d.x)
+              .attr("cy", d.y);
+            updatePath();
+          })
+        );
+
+    })();
+  </script>
+</body>
+</html>

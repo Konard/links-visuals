@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Elastic Arrow with Background Grid & Snap-to-Grid</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #f0f8ff; /* a light background to complement the blueprint grid */
+    }
+    svg {
+      display: block;
+    }
+    /* Debug coordinates display */
+    #coordinates {
+      position: fixed;
+      bottom: 10px;
+      left: 10px;
+      background: rgba(255, 255, 255, 0.8);
+      padding: 10px;
+      font-family: monospace;
+      font-size: 12px;
+      white-space: pre;
+    }
+  </style>
+</head>
+<body>
+  <div id="coordinates"></div>
+  <script type="module">
+    const { use } = await import("https://esm.sh/use-m");
+    (async () => {
+      const d3 = await use('d3');
+
+      // ------ Adjustable parameters ------
+      // We'll keep the same overall horizontal extent as before.
+      // Let the unmovable center be at cx = width/2.
+      // We want 4 intervals from the center to the start (and similarly to the finish).
+      // Previously we used a basePadding of 155. To maintain that,
+      // we define gridSpacing so that: start.x = cx - 4 * gridSpacing equals 155.
+      // That is: gridSpacing = (cx - 155) / 4.
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      const cx = width / 2;
+      const cy = height / 2;
+      const basePadding = 155; // This will be our leftmost x coordinate.
+      const gridSpacing = (cx - basePadding) / 4; // spacing between control points and grid intersections.
+      const snapThreshold = 20;   // snapping threshold in pixels.
+      const circleRadius = 24;    // At least twice the main line's stroke thickness (12).
+
+      // ------ Define control points with their virtual stacking order (z) ------
+      // We have 9 points in order:
+      // Left side: start, left intermediate 1, left intermediate 2, left intermediate 3.
+      // Then center.
+      // Right side: right intermediate 1, right intermediate 2, right intermediate 3, finish.
+      //
+      // Their x-positions are defined so that they lie exactly on grid intersections.
+      const points = [
+        { id: "start",   x: cx - 4 * gridSpacing, y: cy, type: "endpoint",    draggable: true,  z: 1 },
+        { id: "p1",      x: cx - 3 * gridSpacing, y: cy, type: "intermediate",draggable: true,  z: 2 },
+        { id: "p2",      x: cx - 2 * gridSpacing, y: cy, type: "intermediate",draggable: true,  z: 3 },
+        { id: "p3",      x: cx - 1 * gridSpacing, y: cy, type: "intermediate",draggable: true,  z: 4 },
+        { id: "center",  x: cx,                 y: cy, type: "center",      draggable: false, z: 0 },
+        { id: "p4",      x: cx + 1 * gridSpacing, y: cy, type: "intermediate",draggable: true,  z: 5 },
+        { id: "p5",      x: cx + 2 * gridSpacing, y: cy, type: "intermediate",draggable: true,  z: 6 },
+        { id: "p6",      x: cx + 3 * gridSpacing, y: cy, type: "intermediate",draggable: true,  z: 7 },
+        { id: "end",     x: cx + 4 * gridSpacing, y: cy, type: "endpoint",    draggable: true,  z: 8 }
+      ];
+
+      // ------ Create SVG container ------
+      const svg = d3.select("body")
+                    .append("svg")
+                    .attr("width", width)
+                    .attr("height", height);
+
+      // ------ Draw background grid ------
+      // The grid is a square grid with a side equal to gridSpacing, centered at (cx,cy)
+      const gridGroup = svg.insert("g", ":first-child"); // insert grid behind everything
+
+      // Compute vertical grid lines covering the whole width.
+      const startX = cx + Math.floor((0 - cx) / gridSpacing) * gridSpacing;
+      const endX = cx + Math.ceil((width - cx) / gridSpacing) * gridSpacing;
+      for (let x = startX; x <= endX; x += gridSpacing) {
+        gridGroup.append("line")
+          .attr("x1", x)
+          .attr("y1", 0)
+          .attr("x2", x)
+          .attr("y2", height)
+          .attr("stroke", "rgba(0,170,255,0.2)")
+          .attr("stroke-width", 1);
+      }
+      // Compute horizontal grid lines covering the whole height.
+      const startY = cy + Math.floor((0 - cy) / gridSpacing) * gridSpacing;
+      const endY = cy + Math.ceil((height - cy) / gridSpacing) * gridSpacing;
+      for (let y = startY; y <= endY; y += gridSpacing) {
+        gridGroup.append("line")
+          .attr("x1", 0)
+          .attr("y1", y)
+          .attr("x2", width)
+          .attr("y2", y)
+          .attr("stroke", "rgba(0,170,255,0.2)")
+          .attr("stroke-width", 1);
+      }
+
+      // ------ Debug: update coordinates display ------
+      function updateCoordinates() {
+        const coordsDiv = document.getElementById("coordinates");
+        let text = "";
+        points.forEach(p => {
+          text += `${p.id}: (${Math.round(p.x)}, ${Math.round(p.y)})  z=${p.z}\n`;
+        });
+        coordsDiv.innerText = text;
+      }
+      updateCoordinates();
+
+      // ------ Marker definitions ------
+      const defs = svg.append("defs");
+
+      // CROSS marker for the start endpoint.
+      defs.append("marker")
+          .attr("id", "cross-marker")
+          .attr("viewBox", "0 0 100 100")
+          .attr("markerWidth", 100)
+          .attr("markerHeight", 100)
+          .attr("refX", 50)
+          .attr("refY", 50)
+          .attr("orient", "auto")
+        .append("g")
+          .call(g => {
+            g.append("line")
+              .attr("x1", 62.5 - (12.5 - 12.5/1.618))
+              .attr("y1", 25 + 14.5 - 0.23)
+              .attr("x2", 62.5 - (12.5 - 12.5/1.618))
+              .attr("y2", 75 - 14.5 + 0.23)
+              .attr("stroke", "black");
+          });
+
+      // ARROW marker for the end endpoint.
+      defs.append("marker")
+          .attr("id", "arrow-marker")
+          .attr("viewBox", "0 0 100 100")
+          .attr("markerWidth", 100)
+          .attr("markerHeight", 100)
+          .attr("refX", 10)
+          .attr("refY", 50)
+          .attr("orient", "auto")
+        .append("g")
+          .call(g => {
+            g.append("line")
+              .attr("x1", 10 + 0.35)
+              .attr("y1", 50 + 0.35)
+              .attr("x2", 0 - 0.35)
+              .attr("y2", 40 - 0.35)
+              .attr("stroke", "black");
+            g.append("line")
+              .attr("x1", 10 + 0.35)
+              .attr("y1", 50 - 0.35)
+              .attr("x2", 0 - 0.35)
+              .attr("y2", 60 + 0.35)
+              .attr("stroke", "black");
+          });
+
+      // ------ Create the main path element (the elastic arrow) ------
+      const mainPath = svg.append("path")
+                          .attr("fill", "none")
+                          .attr("stroke", "black")
+                          .attr("stroke-width", 12)
+                          .attr("marker-start", "url(#cross-marker)")
+                          .attr("marker-end", "url(#arrow-marker)");
+
+      // ------ Utility functions for vector math ------
+      function subtract(v, w) { return { x: v.x - w.x, y: v.y - w.y }; }
+      function add(v, w)      { return { x: v.x + w.x, y: v.y + w.y }; }
+      function scale(v, s)    { return { x: v.x * s, y: v.y * s }; }
+
+      // ------ Build a smooth path through all control points using Catmull–Rom conversion ------
+      function updatePath() {
+        const n = points.length;
+        const tangents = [];
+        for (let i = 0; i < n; i++) {
+          if (i === 0) {
+            tangents[i] = subtract(points[1], points[0]);
+          } else if (i === n - 1) {
+            tangents[i] = subtract(points[n - 1], points[n - 2]);
+          } else {
+            tangents[i] = scale(subtract(points[i + 1], points[i - 1]), 0.5);
+          }
+        }
+        let pathData = `M ${points[0].x} ${points[0].y} `;
+        for (let i = 0; i < n - 1; i++) {
+          const p0 = points[i];
+          const p1 = points[i + 1];
+          const cp1 = add(p0, scale(tangents[i], 1/3));
+          const cp2 = subtract(p1, scale(tangents[i+1], 1/3));
+          pathData += `C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${p1.x} ${p1.y} `;
+        }
+        mainPath.attr("d", pathData);
+        updateCoordinates();
+      }
+      updatePath();
+
+      // ------ Create and attach draggable circles for control points ------
+      // Each circle is drawn with a transparent fill so that the entire circle is clickable,
+      // a dashed stroke, and a radius of circleRadius.
+      const circles = svg.selectAll("circle")
+                         .data(points)
+                         .enter()
+                         .append("circle")
+                         .attr("class", d => d.id)
+                         .attr("cx", d => d.x)
+                         .attr("cy", d => d.y)
+                         .attr("r", circleRadius)
+                         .attr("fill", "rgba(0,0,0,0)")
+                         .attr("stroke-dasharray", "4,2")
+                         .attr("stroke", d => {
+                           if (d.type === "center") return "black";
+                           if (d.type === "endpoint") return d.id === "start" ? "green" : "red";
+                           return "blue";
+                         });
+
+      // Attach drag behavior to all draggable points.
+      // For snapping, we calculate the nearest grid intersection.
+      circles.filter(d => d.draggable)
+             .call(d3.drag()
+                    .on("drag", function(event, d) {
+                      // Compute the nearest grid intersection.
+                      const nearestX = cx + Math.round((event.x - cx) / gridSpacing) * gridSpacing;
+                      const nearestY = cy + Math.round((event.y - cy) / gridSpacing) * gridSpacing;
+                      const distanceToGrid = Math.hypot(event.x - nearestX, event.y - nearestY);
+                      if (distanceToGrid < snapThreshold) {
+                        d.x = nearestX;
+                        d.y = nearestY;
+                      } else {
+                        d.x = event.x;
+                        d.y = event.y;
+                      }
+                      d3.select(this)
+                        .attr("cx", d.x)
+                        .attr("cy", d.y);
+                      updatePath();
+                    }));
+
+      // ------ Reorder the circles (virtual stacking order) ------
+      // Sort by the "z" property so that points with higher z are later in the DOM (on top).
+      circles.sort((a, b) => a.z - b.z);
+
+    })();
+  </script>
+</body>
+</html>

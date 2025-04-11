@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Elastic Infinity Arrow with Smooth Continuity</title>
+  <style>
+    /* ... (keep existing styles the same) ... */
+  </style>
+</head>
+<body>
+  <button id="fullscreen-btn">Full Screen</button>
+  <div id="coordinates"></div>
+  <script type="module">
+    const { use } = await import("https://esm.sh/use-m");
+    (async () => {
+      const d3 = await use('d3');
+      
+      // ------ Parameters ------
+      const basePadding = 155;
+      const snapThreshold = 20;
+      const minCurveRadius = 100;  // Minimum radius for circular bending
+      const stiffness = 0.5;       // Elastic stiffness factor
+
+      // ------ Setup ------
+      let width = window.innerWidth;
+      let height = window.innerHeight;
+      const fixedCenter = { x: width/2, y: height/2 };
+      
+      const svg = d3.select("body")
+        .append("svg")
+        .attr("width", width)
+        .attr("height", height);
+
+      // ------ Endpoints ------
+      let start = { x: basePadding, y: height - basePadding };
+      let end   = { x: width - basePadding,  y: basePadding };
+      let startMoved = false, endMoved = false;
+
+      // ------ Path Generation ------
+      function calculateControlPoints(p1, p2, center) {
+        const d1 = Math.hypot(center.x - p1.x, center.y - p1.y);
+        const d2 = Math.hypot(p2.x - center.x, p2.y - center.y);
+        
+        // Direction vectors
+        const dir1 = normalize({ x: center.x - p1.x, y: center.y - p1.y });
+        const dir2 = normalize({ x: p2.x - center.x, y: p2.y - center.y });
+
+        // Curvature factors based on distance
+        const curveFactor1 = Math.min(d1 / minCurveRadius, 1) * stiffness;
+        const curveFactor2 = Math.min(d2 / minCurveRadius, 1) * stiffness;
+
+        // Control points using perpendiculars
+        const c1 = {
+          x: p1.x + dir1.y * d1 * curveFactor1,
+          y: p1.y - dir1.x * d1 * curveFactor1
+        };
+        
+        const c2 = {
+          x: center.x - dir1.y * d1 * curveFactor1,
+          y: center.y + dir1.x * d1 * curveFactor1
+        };
+
+        const c3 = {
+          x: center.x + dir2.y * d2 * curveFactor2,
+          y: center.y - dir2.x * d2 * curveFactor2
+        };
+
+        const c4 = {
+          x: p2.x - dir2.y * d2 * curveFactor2,
+          y: p2.y + dir2.x * d2 * curveFactor2
+        };
+
+        return { c1, c2, c3, c4 };
+      }
+
+      function updatePath() {
+        const leftControls = calculateControlPoints(start, fixedCenter, fixedCenter);
+        const rightControls = calculateControlPoints(fixedCenter, end, fixedCenter);
+
+        const pathData = `
+          M ${start.x} ${start.y}
+          C ${leftControls.c1.x} ${leftControls.c1.y}, 
+            ${leftControls.c2.x} ${leftControls.c2.y}, 
+            ${fixedCenter.x} ${fixedCenter.y}
+          C ${rightControls.c3.x} ${rightControls.c3.y}, 
+            ${rightControls.c4.x} ${rightControls.c4.y}, 
+            ${end.x} ${end.y}
+        `;
+        
+        mainPath.attr("d", pathData);
+        updateCoordinates();
+      }
+
+      // ------ Helper Functions ------
+      function normalize(v) {
+        const mag = Math.hypot(v.x, v.y);
+        return mag === 0 ? { x: 0, y: 0 } : { x: v.x/mag, y: v.y/mag };
+      }
+
+      // ... (keep remaining code identical: markers, drag behavior, resize, etc) ...
+      
+      // ------ Initial Render ------
+      const mainPath = svg.append("path")
+        .attr("fill", "none")
+        .attr("stroke", "black")
+        .attr("stroke-width", 12)
+        .attr("marker-start", "url(#cross-marker)")
+        .attr("marker-end", "url(#arrow-marker)");
+      updatePath();
+    })();
+  </script>
+</body>
+</html>

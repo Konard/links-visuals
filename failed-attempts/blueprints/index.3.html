@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>D3 Smooth Continuous Curve with Extra Intermediate Points</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+    svg { display: block; }
+    #fullscreen-btn {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      z-index: 1000;
+      padding: 10px 15px;
+      background: rgba(255, 255, 255, 0.8);
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    #coordinates {
+      position: fixed;
+      bottom: 10px;
+      left: 10px;
+      z-index: 1000;
+      background: rgba(255, 255, 255, 0.8);
+      padding: 10px;
+      font-family: monospace;
+      font-size: 12px;
+      white-space: pre;
+    }
+  </style>
+</head>
+<body>
+  <button id="fullscreen-btn">Full Screen</button>
+  <div id="coordinates"></div>
+  <script type="module">
+    const { use } = await import("https://esm.sh/use-m");
+    (async () => {
+      const d3 = await use('d3');
+
+      // Adjustable parameters
+      const basePadding = 155;    // initial margin for endpoints
+      const snapThreshold = 20;   // snap endpoints to the center if within this distance
+      const minOffset = 30;       // minimum offset for the intermediate points
+      const alphaFrac = 0.4;      // fraction along vector from endpoint to center for intermediate point
+      const gammaFrac = 0.2;      // fraction for offset magnitude based on distance
+
+      let width = window.innerWidth;
+      let height = window.innerHeight;
+
+      // Fixed center: always the center of the viewport.
+      const fixedCenter = { x: width / 2, y: height / 2 };
+
+      // Create an SVG covering the viewport.
+      const svg = d3.select("body")
+        .append("svg")
+        .attr("width", width)
+        .attr("height", height);
+
+      // Endpoints (these will be draggable).
+      let start = { x: basePadding, y: height - basePadding };
+      let end = { x: width - basePadding, y: basePadding };
+
+      // Flags to check whether an endpoint has been moved manually.
+      let startMoved = false, endMoved = false;
+
+      // Coordinates display (for debugging).
+      function updateCoordinates() {
+        const coordsDiv = document.getElementById("coordinates");
+        coordsDiv.innerText =
+          `Start:       (${Math.round(start.x)}, ${Math.round(start.y)})
+End:         (${Math.round(end.x)}, ${Math.round(end.y)})
+FixedCenter: (${Math.round(fixedCenter.x)}, ${Math.round(fixedCenter.y)})`;
+      }
+      updateCoordinates();
+
+      // Marker definitions.
+      const defs = svg.append("defs");
+
+      // CROSS marker at start.
+      defs.append("marker")
+          .attr("id", "cross-marker")
+          .attr("viewBox", "0 0 100 100")
+          .attr("markerWidth", 100)
+          .attr("markerHeight", 100)
+          .attr("refX", 50)
+          .attr("refY", 50)
+          .attr("orient", "auto")
+        .append("g")
+          .call(g => {
+            g.append("line")
+             .attr("x1", 62.5 - (12.5 - 12.5 / 1.618))
+             .attr("y1", 25 + 14.5 - 0.23)
+             .attr("x2", 62.5 - (12.5 - 12.5 / 1.618))
+             .attr("y2", 75 - 14.5 + 0.23)
+             .attr("stroke", "black");
+          });
+
+      // ARROW marker at end.
+      defs.append("marker")
+          .attr("id", "arrow-marker")
+          .attr("viewBox", "0 0 100 100")
+          .attr("markerWidth", 100)
+          .attr("markerHeight", 100)
+          .attr("refX", 10)
+          .attr("refY", 50)
+          .attr("orient", "auto")
+        .append("g")
+          .call(g => {
+            g.append("line")
+              .attr("x1", 10 + 0.35)
+              .attr("y1", 50 + 0.35)
+              .attr("x2", 0 - 0.35)
+              .attr("y2", 40 - 0.35)
+              .attr("stroke", "black");
+            g.append("line")
+              .attr("x1", 10 + 0.35)
+              .attr("y1", 50 - 0.35)
+              .attr("x2", 0 - 0.35)
+              .attr("y2", 60 + 0.35)
+              .attr("stroke", "black");
+          });
+
+      // Create the main path that will represent our smooth curve.
+      const mainPath = svg.append("path")
+         .attr("fill", "none")
+         .attr("stroke", "black")
+         .attr("stroke-width", 12)
+         .attr("marker-start", "url(#cross-marker)")
+         .attr("marker-end", "url(#arrow-marker)");
+
+      // Function to compute intermediate control points and update the curve.
+      function updatePath() {
+        // Compute the intermediate point from start to fixedCenter.
+        let v_x = fixedCenter.x - start.x;
+        let v_y = fixedCenter.y - start.y;
+        let d1 = Math.hypot(v_x, v_y);
+        let u1 = d1 > 0.001 ? { x: v_x / d1, y: v_y / d1 } : { x: 1, y: 0 };
+        // Perpendicular to the direction from start to center.
+        let perp1 = { x: -u1.y, y: u1.x };
+        let beta1 = Math.max(minOffset, d1 * gammaFrac);
+        let midStart = {
+          x: start.x + alphaFrac * v_x + beta1 * perp1.x,
+          y: start.y + alphaFrac * v_y + beta1 * perp1.y
+        };
+
+        // Compute the intermediate point from fixedCenter to end.
+        let w_x = end.x - fixedCenter.x;
+        let w_y = end.y - fixedCenter.y;
+        let d2 = Math.hypot(w_x, w_y);
+        let u2 = d2 > 0.001 ? { x: w_x / d2, y: w_y / d2 } : { x: 1, y: 0 };
+        let perp2 = { x: -u2.y, y: u2.x };
+        let beta2 = Math.max(minOffset, d2 * gammaFrac);
+        let midEnd = {
+          x: fixedCenter.x + alphaFrac * w_x - beta2 * perp2.x,
+          y: fixedCenter.y + alphaFrac * w_y - beta2 * perp2.y
+        };
+
+        // Points for the smooth path.
+        const points = [
+          [start.x, start.y],
+          [midStart.x, midStart.y],
+          [fixedCenter.x, fixedCenter.y],
+          [midEnd.x, midEnd.y],
+          [end.x, end.y]
+        ];
+
+        // Use D3’s line generator with a Catmull–Rom curve to interpolate smoothly.
+        const lineGenerator = d3.line()
+          .curve(d3.curveCatmullRom.alpha(0.5));
+        mainPath.attr("d", lineGenerator(points));
+        updateCoordinates();
+      }
+      updatePath();
+
+      // Drag behavior for the start endpoint.
+      const dragStart = d3.drag()
+        .on("drag", (event) => {
+          startMoved = true;
+          const dx = event.x - fixedCenter.x;
+          const dy = event.y - fixedCenter.y;
+          if (Math.hypot(dx, dy) < snapThreshold) {
+            start.x = fixedCenter.x;
+            start.y = fixedCenter.y;
+          } else {
+            start.x = event.x;
+            start.y = event.y;
+          }
+          d3.select(".start")
+            .attr("cx", start.x)
+            .attr("cy", start.y);
+          updatePath();
+        });
+
+      // Drag behavior for the end endpoint.
+      const dragEnd = d3.drag()
+        .on("drag", (event) => {
+          endMoved = true;
+          const dx = event.x - fixedCenter.x;
+          const dy = event.y - fixedCenter.y;
+          if (Math.hypot(dx, dy) < snapThreshold) {
+            end.x = fixedCenter.x;
+            end.y = fixedCenter.y;
+          } else {
+            end.x = event.x;
+            end.y = event.y;
+          }
+          d3.select(".end")
+            .attr("cx", end.x)
+            .attr("cy", end.y);
+          updatePath();
+        });
+
+      // Append draggable circles for endpoints.
+      svg.append("circle")
+         .attr("class", "start")
+         .attr("cx", start.x)
+         .attr("cy", start.y)
+         .attr("r", 10)
+         .attr("fill", "transparent")
+         .attr("stroke", "green")
+         .attr("stroke-dasharray", "2,2")
+         .attr("stroke-opacity", 0.5)
+         .style("cursor", "pointer")
+         .call(dragStart);
+
+      svg.append("circle")
+         .attr("class", "end")
+         .attr("cx", end.x)
+         .attr("cy", end.y)
+         .attr("r", 10)
+         .attr("fill", "transparent")
+         .attr("stroke", "red")
+         .attr("stroke-dasharray", "2,2")
+         .attr("stroke-opacity", 0.5)
+         .style("cursor", "pointer")
+         .call(dragEnd);
+
+      // Update on window resize.
+      window.addEventListener("resize", () => {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        svg.attr("width", width).attr("height", height);
+        fixedCenter.x = width / 2;
+        fixedCenter.y = height / 2;
+        if (!startMoved) {
+          start.x = basePadding;
+          start.y = height - basePadding;
+          svg.select("circle.start")
+             .attr("cx", start.x)
+             .attr("cy", start.y);
+        }
+        if (!endMoved) {
+          end.x = width - basePadding;
+          end.y = basePadding;
+          svg.select("circle.end")
+             .attr("cx", end.x)
+             .attr("cy", end.y);
+        }
+        updatePath();
+      });
+
+      // Full screen toggle.
+      document.getElementById("fullscreen-btn").addEventListener("click", () => {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen();
+        } else {
+          document.exitFullscreen();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

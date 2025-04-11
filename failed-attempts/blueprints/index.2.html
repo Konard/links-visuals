@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>D3 Curve with Extra Control Points & Snap Behavior</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+    svg {
+      display: block;
+    }
+    #fullscreen-btn {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      z-index: 1000;
+      padding: 10px 15px;
+      background: rgba(255, 255, 255, 0.8);
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    /* Coordinates panel */
+    #coordinates {
+      position: fixed;
+      bottom: 10px;
+      left: 10px;
+      z-index: 1000;
+      background: rgba(255, 255, 255, 0.8);
+      padding: 10px;
+      font-family: monospace;
+      font-size: 12px;
+      white-space: pre;
+    }
+  </style>
+</head>
+<body>
+  <button id="fullscreen-btn">Full Screen</button>
+  <div id="coordinates"></div>
+  <script type="module">
+    const { use } = await import("https://esm.sh/use-m");
+    (async () => {
+      const d3 = await use('d3');
+
+      // ----------------------------
+      // Adjustable parameters
+      // ----------------------------
+      const basePadding = 155;    // Margin from each edge for initial placement
+      const strokeWidth = 12;     // Thickness for the main curve
+      const snapThreshold = 20;   // If an endpoint is within this many pixels from center, it snaps
+      const minOffset = 30;       // Minimum offset for the control points
+
+      let width = window.innerWidth;
+      let height = window.innerHeight;
+
+      // Fixed center defined as the center of the viewport.
+      const fixedCenter = { x: width / 2, y: height / 2 };
+
+      // Create an SVG covering the page
+      const svg = d3.select("body")
+        .append("svg")
+        .attr("width", width)
+        .attr("height", height);
+
+      // ------------------------------------------------
+      // Initial endpoints
+      // ------------------------------------------------
+      let start = {
+        x: basePadding,
+        y: height - basePadding
+      };
+      let end = {
+        x: width - basePadding,
+        y: basePadding
+      };
+
+      // Flags to track if endpoints have been moved manually
+      let startMoved = false, endMoved = false;
+
+      // ------------------------------------------------
+      // Update coordinate info
+      // ------------------------------------------------
+      function updateCoordinates() {
+        const coordsDiv = document.getElementById("coordinates");
+        coordsDiv.innerText =
+          `Start:       (${Math.round(start.x)}, ${Math.round(start.y)})
+End:         (${Math.round(end.x)}, ${Math.round(end.y)})
+FixedCenter: (${Math.round(fixedCenter.x)}, ${Math.round(fixedCenter.y)})`;
+      }
+      updateCoordinates();
+
+      // ------------------------------------------------
+      // Marker definitions (cross and arrow)
+      // ------------------------------------------------
+      const defs = svg.append("defs");
+
+      // CROSS MARKER
+      defs.append("marker")
+          .attr("id", "cross-marker")
+          .attr("viewBox", "0 0 100 100")
+          .attr("markerWidth", 100)
+          .attr("markerHeight", 100)
+          .attr("refX", 50)
+          .attr("refY", 50)
+          .attr("orient", "auto")
+        .append("g")
+          .call(g => {
+            g.append("line")
+             .attr("x1", 62.5 - (12.5 - 12.5 / 1.618))
+             .attr("y1", 25 + 14.5 - 0.23)
+             .attr("x2", 62.5 - (12.5 - 12.5 / 1.618))
+             .attr("y2", 75 - 14.5 + 0.23)
+             .attr("stroke", "black");
+          });
+
+      // ARROW MARKER
+      defs.append("marker")
+          .attr("id", "arrow-marker")
+          .attr("viewBox", "0 0 100 100")
+          .attr("markerWidth", 100)
+          .attr("markerHeight", 100)
+          .attr("refX", 10)
+          .attr("refY", 50)
+          .attr("orient", "auto")
+        .append("g")
+          .call(g => {
+            // Upper arrow line
+            g.append("line")
+              .attr("x1", 10 + 0.35)
+              .attr("y1", 50 + 0.35)
+              .attr("x2", 0 - 0.35)
+              .attr("y2", 40 - 0.35)
+              .attr("stroke", "black");
+            // Lower arrow line
+            g.append("line")
+              .attr("x1", 10 + 0.35)
+              .attr("y1", 50 - 0.35)
+              .attr("x2", 0 - 0.35)
+              .attr("y2", 60 + 0.35)
+              .attr("stroke", "black");
+          });
+
+      // ------------------------------------------------
+      // Compute control points for two quadratic segments:
+      //   Segment 1: from start to fixedCenter
+      //   Segment 2: from fixedCenter to end
+      // Each control point is placed at the halfway point plus a perpendicular offset.
+      // A minimum offset is used to prevent a straight line when snapped.
+      // ------------------------------------------------
+      function getControlPoints() {
+        // Distance from start to fixedCenter and from end to fixedCenter
+        const d1 = Math.hypot(fixedCenter.x - start.x, fixedCenter.y - start.y);
+        const d2 = Math.hypot(end.x - fixedCenter.x, end.y - fixedCenter.y);
+        // Use a fraction of the smaller distance but enforce a minimum value.
+        const offsetMag = Math.max(Math.min(d1, d2) * 0.3, minOffset);
+
+        // Determine an angle for the offset.
+        // If the first segment is degenerate, use the F->end direction as a fallback.
+        let angle;
+        if (d1 < 0.001) {
+          angle = Math.atan2(end.y - fixedCenter.y, end.x - fixedCenter.x);
+        } else {
+          angle = Math.atan2(fixedCenter.y - start.y, fixedCenter.x - start.x);
+        }
+        // Perpendicular offset: rotate the angle 90° (add PI/2)
+        const offsetX = offsetMag * Math.cos(angle + Math.PI/2);
+        const offsetY = offsetMag * Math.sin(angle + Math.PI/2);
+
+        const control1 = {
+          x: start.x + (fixedCenter.x - start.x) * 0.5 + offsetX,
+          y: start.y + (fixedCenter.y - start.y) * 0.5 + offsetY
+        };
+        const control2 = {
+          x: end.x + (fixedCenter.x - end.x) * 0.5 - offsetX,
+          y: end.y + (fixedCenter.y - end.y) * 0.5 - offsetY
+        };
+        return { control1, control2 };
+      }
+
+      // ------------------------------------------------
+      // Create the path as two connected quadratic Bézier segments.
+      // ------------------------------------------------
+      const mainPath = svg.append("path")
+         .attr("fill", "none")
+         .attr("stroke", "black")
+         .attr("stroke-width", strokeWidth)
+         .attr("marker-start", "url(#cross-marker)")
+         .attr("marker-end", "url(#arrow-marker)");
+
+      // ------------------------------------------------
+      // Function to update the path "d" attribute with new control points.
+      // ------------------------------------------------
+      function updatePath() {
+        const { control1, control2 } = getControlPoints();
+        // Construct path as two quadratic segments: S -> F, then F -> E.
+        const d = `M ${start.x} ${start.y} ` +
+                  `Q ${control1.x} ${control1.y} ${fixedCenter.x} ${fixedCenter.y} ` +
+                  `Q ${control2.x} ${control2.y} ${end.x} ${end.y}`;
+        mainPath.attr("d", d);
+        updateCoordinates();
+      }
+      updatePath();
+
+      // ------------------------------------------------
+      // Drag behavior for the start endpoint
+      // ------------------------------------------------
+      const dragStart = d3.drag()
+        .on("drag", (event) => {
+          startMoved = true;
+          // Snap to fixed center if close enough
+          const dx = event.x - fixedCenter.x;
+          const dy = event.y - fixedCenter.y;
+          if (Math.hypot(dx, dy) < snapThreshold) {
+            start.x = fixedCenter.x;
+            start.y = fixedCenter.y;
+          } else {
+            start.x = event.x;
+            start.y = event.y;
+          }
+          d3.select(".start")
+            .attr("cx", start.x)
+            .attr("cy", start.y);
+          updatePath();
+        });
+
+      // ------------------------------------------------
+      // Drag behavior for the end endpoint
+      // ------------------------------------------------
+      const dragEnd = d3.drag()
+        .on("drag", (event) => {
+          endMoved = true;
+          const dx = event.x - fixedCenter.x;
+          const dy = event.y - fixedCenter.y;
+          if (Math.hypot(dx, dy) < snapThreshold) {
+            end.x = fixedCenter.x;
+            end.y = fixedCenter.y;
+          } else {
+            end.x = event.x;
+            end.y = event.y;
+          }
+          d3.select(".end")
+            .attr("cx", end.x)
+            .attr("cy", end.y);
+          updatePath();
+        });
+
+      // ------------------------------------------------
+      // Append circles for endpoints (visual and draggable)
+      // ------------------------------------------------
+      svg.append("circle")
+         .attr("class", "start")
+         .attr("cx", start.x)
+         .attr("cy", start.y)
+         .attr("r", 10)
+         .attr("fill", "transparent")
+         .attr("stroke", "green")
+         .attr("stroke-dasharray", "2,2")
+         .attr("stroke-opacity", 0.5)
+         .style("cursor", "pointer")
+         .call(dragStart);
+
+      svg.append("circle")
+         .attr("class", "end")
+         .attr("cx", end.x)
+         .attr("cy", end.y)
+         .attr("r", 10)
+         .attr("fill", "transparent")
+         .attr("stroke", "red")
+         .attr("stroke-dasharray", "2,2")
+         .attr("stroke-opacity", 0.5)
+         .style("cursor", "pointer")
+         .call(dragEnd);
+
+      // ------------------------------------------------
+      // Update on window resize
+      // ------------------------------------------------
+      window.addEventListener("resize", () => {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        svg.attr("width", width).attr("height", height);
+        fixedCenter.x = width / 2;
+        fixedCenter.y = height / 2;
+        if (!startMoved) {
+          start.x = basePadding;
+          start.y = height - basePadding;
+          svg.select("circle.start").attr("cx", start.x).attr("cy", start.y);
+        }
+        if (!endMoved) {
+          end.x = width - basePadding;
+          end.y = basePadding;
+          svg.select("circle.end").attr("cx", end.x).attr("cy", end.y);
+        }
+        updatePath();
+      });
+
+      // ------------------------------------------------
+      // Full Screen toggle
+      // ------------------------------------------------
+      document.getElementById("fullscreen-btn").addEventListener("click", () => {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen();
+        } else {
+          document.exitFullscreen();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Elastic Infinity–like Arrow with 4 Segments & C1 Continuity</title>
+  <style>
+    html, body {
+      margin: 0; padding: 0;
+      height: 100%;
+      overflow: hidden;
+    }
+    svg { display: block; }
+    #fullscreen-btn {
+      position: fixed;
+      top: 10px; right: 10px;
+      z-index: 1000;
+      padding: 10px 15px;
+      background: rgba(255,255,255,0.8);
+      border: none; cursor: pointer;
+      font-size: 14px;
+    }
+    /* Debug coordinates */
+    #coordinates {
+      position: fixed;
+      bottom: 10px;
+      left: 10px;
+      z-index: 1000;
+      background: rgba(255,255,255,0.8);
+      padding: 10px;
+      font-family: monospace;
+      font-size: 12px;
+      white-space: pre;
+    }
+  </style>
+</head>
+<body>
+  <button id="fullscreen-btn">Full Screen</button>
+  <div id="coordinates"></div>
+  <script type="module">
+    const { use } = await import("https://esm.sh/use-m");
+    (async () => {
+      const d3 = await use('d3');
+      
+      // ------ Adjustable parameters ------
+      const basePadding = 155;   // initial margin for endpoints
+      const snapThreshold = 20;  // snap if endpoint is within this range of fixedCenter
+      
+      // Parameters for “elastic” curvature:
+      const d_min = 50;          // effective minimum distance to avoid collapse
+      const d_max = 500;         // above this the curve is nearly straight
+      const theta_max = Math.PI/4; // maximum rotation (45°) when the distance is near d_min
+      
+      // ------ Set dimensions & fixed center ------
+      let width = window.innerWidth;
+      let height = window.innerHeight;
+      const fixedCenter = { x: width/2, y: height/2 };
+      
+      // ------ Create SVG ------
+      const svg = d3.select("body")
+        .append("svg")
+        .attr("width", width)
+        .attr("height", height);
+      
+      // ------ Define endpoints (draggable) ------
+      let start = { x: basePadding, y: height - basePadding };
+      let end   = { x: width - basePadding,  y: basePadding };
+      let startMoved = false, endMoved = false;
+      
+      // ------ Debug: update coordinates display ------
+      function updateCoordinates(additional = "") {
+        const coordsDiv = document.getElementById("coordinates");
+        coordsDiv.innerText =
+          `Start:       (${Math.round(start.x)}, ${Math.round(start.y)})
+End:         (${Math.round(end.x)}, ${Math.round(end.y)})
+FixedCenter: (${Math.round(fixedCenter.x)}, ${Math.round(fixedCenter.y)})
+${additional}`;
+      }
+      updateCoordinates();
+      
+      // ------ Marker definitions (same as before) ------
+      const defs = svg.append("defs");
+      
+      // CROSS marker for start
+      defs.append("marker")
+          .attr("id", "cross-marker")
+          .attr("viewBox", "0 0 100 100")
+          .attr("markerWidth", 100)
+          .attr("markerHeight", 100)
+          .attr("refX", 50)
+          .attr("refY", 50)
+          .attr("orient", "auto")
+        .append("g")
+          .call(g => {
+            g.append("line")
+              .attr("x1", 62.5 - (12.5 - 12.5/1.618))
+              .attr("y1", 25 + 14.5 - 0.23)
+              .attr("x2", 62.5 - (12.5 - 12.5/1.618))
+              .attr("y2", 75 - 14.5 + 0.23)
+              .attr("stroke", "black");
+          });
+      
+      // ARROW marker for end
+      defs.append("marker")
+          .attr("id", "arrow-marker")
+          .attr("viewBox", "0 0 100 100")
+          .attr("markerWidth", 100)
+          .attr("markerHeight", 100)
+          .attr("refX", 10)
+          .attr("refY", 50)
+          .attr("orient", "auto")
+        .append("g")
+          .call(g => {
+            // Upper arrow line
+            g.append("line")
+              .attr("x1", 10 + 0.35)
+              .attr("y1", 50 + 0.35)
+              .attr("x2", 0 - 0.35)
+              .attr("y2", 40 - 0.35)
+              .attr("stroke", "black");
+            // Lower arrow line
+            g.append("line")
+              .attr("x1", 10 + 0.35)
+              .attr("y1", 50 - 0.35)
+              .attr("x2", 0 - 0.35)
+              .attr("y2", 60 + 0.35)
+              .attr("stroke", "black");
+          });
+      
+      // ------ Utility functions ------
+      function clamp(val, min, max) {
+        return Math.max(min, Math.min(val, max));
+      }
+      function lerp(a, b, t) {
+        return a * (1-t) + b * t;
+      }
+      function normalize(v) {
+        const mag = Math.hypot(v.x, v.y);
+        return mag === 0 ? { x: 0, y: 0 } : { x: v.x / mag, y: v.y / mag };
+      }
+      function rotateVector(v, angle) {
+        return {
+          x: v.x * Math.cos(angle) - v.y * Math.sin(angle),
+          y: v.x * Math.sin(angle) + v.y * Math.cos(angle)
+        };
+      }
+      
+      // ------ Helper: compute a control offset between two anchor points ------
+      // When going from point P to Q, this function computes an offset vector,
+      // scaled by the “elastic” parameters. The flag invert switches the sign of rotation.
+      function controlOffset(P, Q, invert = false) {
+        const vec = { x: Q.x - P.x, y: Q.y - P.y };
+        let L = Math.hypot(vec.x, vec.y);
+        L = Math.max(L, d_min);
+        const t = clamp((L - d_min) / (d_max - d_min), 0, 1);
+        const alpha = lerp(0.9, 0.5, t);
+        const theta = theta_max * (1 - t);
+        const n = normalize(vec);
+        // Rotate by +theta for a “departure” or by –theta for an “arrival”
+        const rotated = rotateVector(n, invert ? -theta : theta);
+        return { x: alpha * L * rotated.x, y: alpha * L * rotated.y };
+      }
+      
+      // ------ New updatePath: 4 segments with C1 continuity ------
+      function updatePath() {
+        // Define five anchors:
+        // A = start, E = end, and keep fixedCenter as the middle anchor.
+        // Create intermediate anchors B and D as midpoints.
+        const A = start;
+        const C = fixedCenter;
+        const E = end;
+        const B = { x: (start.x + fixedCenter.x) / 2, y: (start.y + fixedCenter.y) / 2 };
+        const D = { x: (fixedCenter.x + end.x) / 2, y: (fixedCenter.y + end.y) / 2 };
+        
+        // --- Segment A (from A to B) ---
+        const CP1_A = { 
+          x: A.x + controlOffset(A, B, false).x,
+          y: A.y + controlOffset(A, B, false).y
+        };
+        // Compute an independent arrival control for A->B at B (from B toward A)
+        const CP2_A_ind = { 
+          x: B.x - controlOffset(B, A, true).x,
+          y: B.y - controlOffset(B, A, true).y
+        };
+        
+        // --- Segment B (from B to C) ---
+        // Independent departure control at B (from B toward C)
+        const CP1_B_ind = { 
+          x: B.x + controlOffset(B, C, false).x,
+          y: B.y + controlOffset(B, C, false).y
+        };
+        // Independent arrival control at C (approaching from B)
+        const CP2_B_ind = { 
+          x: C.x - controlOffset(C, B, true).x,
+          y: C.y - controlOffset(C, B, true).y
+        };
+        
+        // --- Segment C (from C to D) ---
+        // Independent departure control at C (from C toward D)
+        const CP1_C_ind = { 
+          x: C.x + controlOffset(C, D, false).x,
+          y: C.y + controlOffset(C, D, false).y
+        };
+        // Independent arrival control at D (approaching from C)
+        const CP2_C_ind = { 
+          x: D.x - controlOffset(D, C, true).x,
+          y: D.y - controlOffset(D, C, true).y
+        };
+        
+        // --- Segment D (from D to E) ---
+        const CP1_D = { 
+          x: D.x + controlOffset(D, E, false).x,
+          y: D.y + controlOffset(D, E, false).y
+        };
+        const CP2_D = { 
+          x: E.x - controlOffset(E, D, true).x,
+          y: E.y - controlOffset(E, D, true).y
+        };
+        
+        // --- Enforce C1 continuity by averaging the independent controls at the joints ---
+        // At joint B (between Segments A and B)
+        const midB = { 
+          x: (CP2_A_ind.x + CP1_B_ind.x) / 2,
+          y: (CP2_A_ind.y + CP1_B_ind.y) / 2
+        };
+        const CP2_A = midB;
+        const CP1_B = midB;
+        
+        // At joint C (between Segments B and C)
+        const midC = { 
+          x: (CP2_B_ind.x + CP1_C_ind.x) / 2,
+          y: (CP2_B_ind.y + CP1_C_ind.y) / 2
+        };
+        const CP2_B = midC;
+        const CP1_C = midC;
+        
+        // At joint D (between Segments C and D)
+        const midD = { 
+          x: (CP2_C_ind.x + CP1_D.x) / 2,
+          y: (CP2_C_ind.y + CP1_D.y) / 2
+        };
+        const CP2_C = midD;
+        const CP1_D = midD;
+        
+        // Build the full path as a sequence of 4 cubic segments:
+        // Segment A: A -> B; B: Segment B: B -> C; Segment C: C -> D; Segment D: D -> E.
+        const pathData =
+          `M ${A.x} ${A.y} ` +
+          `C ${CP1_A.x} ${CP1_A.y}, ${CP2_A.x} ${CP2_A.y}, ${B.x} ${B.y} ` +
+          `C ${CP1_B.x} ${CP1_B.y}, ${CP2_B.x} ${CP2_B.y}, ${C.x} ${C.y} ` +
+          `C ${CP1_C.x} ${CP1_C.y}, ${CP2_C.x} ${CP2_C.y}, ${D.x} ${D.y} ` +
+          `C ${CP1_D.x} ${CP1_D.y}, ${CP2_D.x} ${CP2_D.y}, ${E.x} ${E.y}`;
+        
+        mainPath.attr("d", pathData);
+        updateCoordinates(
+          `Joint B:    (${Math.round(B.x)}, ${Math.round(B.y)})
+Joint D:    (${Math.round(D.x)}, ${Math.round(D.y)})`
+        );
+      }
+      
+      // ------ Create the main path (a single <path> element) ------
+      const mainPath = svg.append("path")
+         .attr("fill", "none")
+         .attr("stroke", "black")
+         .attr("stroke-width", 12)
+         .attr("marker-start", "url(#cross-marker)")
+         .attr("marker-end", "url(#arrow-marker)");
+      updatePath();
+      
+      // ------ Drag behaviors for endpoints ------
+      const dragStart = d3.drag()
+        .on("drag", (event) => {
+          startMoved = true;
+          const dx = event.x - fixedCenter.x;
+          const dy = event.y - fixedCenter.y;
+          if (Math.hypot(dx, dy) < snapThreshold) {
+            start.x = fixedCenter.x;
+            start.y = fixedCenter.y;
+          } else {
+            start.x = event.x;
+            start.y = event.y;
+          }
+          d3.select(".start")
+            .attr("cx", start.x)
+            .attr("cy", start.y);
+          updatePath();
+        });
+      
+      const dragEnd = d3.drag()
+        .on("drag", (event) => {
+          endMoved = true;
+          const dx = event.x - fixedCenter.x;
+          const dy = event.y - fixedCenter.y;
+          if (Math.hypot(dx, dy) < snapThreshold) {
+            end.x = fixedCenter.x;
+            end.y = fixedCenter.y;
+          } else {
+            end.x = event.x;
+            end.y = event.y;
+          }
+          d3.select(".end")
+            .attr("cx", end.x)
+            .attr("cy", end.y);
+          updatePath();
+        });
+      
+      // ------ Append draggable endpoint circles ------
+      svg.append("circle")
+         .attr("class", "start")
+         .attr("cx", start.x)
+         .attr("cy", start.y)
+         .attr("r", 10)
+         .attr("fill", "transparent")
+         .attr("stroke", "green")
+         .attr("stroke-dasharray", "2,2")
+         .attr("stroke-opacity", 0.5)
+         .style("cursor", "pointer")
+         .call(dragStart);
+      
+      svg.append("circle")
+         .attr("class", "end")
+         .attr("cx", end.x)
+         .attr("cy", end.y)
+         .attr("r", 10)
+         .attr("fill", "transparent")
+         .attr("stroke", "red")
+         .attr("stroke-dasharray", "2,2")
+         .attr("stroke-opacity", 0.5)
+         .style("cursor", "pointer")
+         .call(dragEnd);
+      
+      // ------ Update on window resize ------
+      window.addEventListener("resize", () => {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        svg.attr("width", width).attr("height", height);
+        fixedCenter.x = width / 2;
+        fixedCenter.y = height / 2;
+        if (!startMoved) {
+          start.x = basePadding;
+          start.y = height - basePadding;
+          svg.select("circle.start").attr("cx", start.x).attr("cy", start.y);
+        }
+        if (!endMoved) {
+          end.x = width - basePadding;
+          end.y = basePadding;
+          svg.select("circle.end").attr("cx", end.x).attr("cy", end.y);
+        }
+        updatePath();
+      });
+      
+      // ------ Full screen toggle ------
+      document.getElementById("fullscreen-btn").addEventListener("click", () => {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen();
+        } else {
+          document.exitFullscreen();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
