@@ -242,7 +242,6 @@
         mainPath.attr("d", pathData);
         updateCoordinates();
       }
-      updatePath();
 
       // ------ Draw control point circles ------
       // They are drawn with a transparent fill and a dashed border by default.
@@ -321,6 +320,7 @@
         updatePath();
       }
       window.addEventListener("resize", resize);
+      resize();
 
     })();
   </script>
