@@ -43,12 +43,11 @@
       const snapThreshold = 20; // in pixels
       const circleRadius = 24;
 
-      // Globals for dimensions & spacing; recalculated on resize
+      // Globals for dimensions & spacing
       let width, height, cx, cy, gridSpacing, halfSpacing;
 
       // ------ Setup SVG & Grid Group ------
-      const svg = d3.select("body")
-                    .append("svg");
+      const svg = d3.select("body").append("svg");
       const gridGroup = svg.insert("g", ":first-child");
 
       // ------ Define control points with grid factors ------
@@ -241,16 +240,10 @@
                  updatePath();
                })
                .on("end", function(event, d) {
-                 // rebase to grid factors
-                 const fx = (d.x - cx) / gridSpacing;
-                 const fy = (d.y - cy) / gridSpacing;
-                 d.xFactor = Math.round(fx * 2) / 2;
-                 d.yFactor = Math.round(fy * 2) / 2;
-                 d.x = cx + d.xFactor * gridSpacing;
-                 d.y = cy + d.yFactor * gridSpacing;
+                 // record raw grid factors (fractional allowed)
+                 d.xFactor = (d.x - cx) / gridSpacing;
+                 d.yFactor = (d.y - cy) / gridSpacing;
                  d3.select(this)
-                   .attr("cx", d.x)
-                   .attr("cy", d.y)
                    .attr("stroke-dasharray", "4,2");
                  updatePath();
                }));
