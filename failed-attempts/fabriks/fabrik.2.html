@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Constant-Curvature IK (4-link)</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#111;color:#eee;font-family:sans-serif}
+canvas{display:block;width:100%;height:100%}
+#info{position:fixed;top:0;left:0;padding:6px 9px;background:rgba(0,0,0,.4);font-size:14px;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info">Drag / tap to move the red target</div>
+
+<script>
+/* ──────────────────────────── constants ──────────────────────────── */
+const SEG_COUNT = 4;            // 4 links → 5 joints
+const SEG_LEN   = 80;           // px
+const ORIGIN    = {x: innerWidth/2, y: innerHeight*0.75};
+const MAX_REACH = SEG_COUNT*SEG_LEN;
+
+/* ────────────────────────── data containers ───────────────────────── */
+const joints = Array.from({length: SEG_COUNT+1}, ()=>({x:0,y:0}));
+let target   = {x: ORIGIN.x, y: ORIGIN.y-SEG_LEN*SEG_COUNT};
+
+/* ────────────────────────── solver: constant-curvature arc ──────────
+   Let β   = direction of the first segment
+       θ   = signed, equal turning angle at every joint (all left or all right)
+       n   = number of segments
+
+   End-point displacement:
+       R(θ) = sin(nθ/2) / sin(θ/2)              (unit-length ratio)
+       |T|  = L · R(θ)
+       α    = angle of vector ORIGIN→TARGET
+
+   Solve for |θ| using a monotone bisection on (0, 2π/n). Sign is chosen
+   so that the arc bends toward the side where TARGET lies relative to
+   the initial “up” direction. Once θ is known:
+       β = α − (n−1)θ/2
+   Finally walk the chain adding L·[cos, sin] along the arc.
+--------------------------------------------------------------------- */
+function solveArc(){
+  const dx = target.x-ORIGIN.x, dy = target.y-ORIGIN.y;
+  const dist = Math.hypot(dx,dy);
+
+  /* — unreachable: fully extend toward target — */
+  if (dist >= MAX_REACH - 1e-3){
+    const ux = dx/dist,  uy = dy/dist;
+    joints[0] = {...ORIGIN};
+    for(let i=1;i<=SEG_COUNT;i++){
+      joints[i].x = joints[i-1].x + ux*SEG_LEN;
+      joints[i].y = joints[i-1].y + uy*SEG_LEN;
+    }
+    return;
+  }
+
+  /* — reachable: constant curvature — */
+  const n = SEG_COUNT, L = SEG_LEN;
+  const goal = dist / L;                       // RHS of equation |T| = L·R
+
+  // monotone bisection for |θ|  in (0, 2π/n)
+  let lo = 1e-4, hi = Math.PI*2/n - 1e-4;
+  const R = θ => Math.sin(n*θ/2) / Math.sin(θ/2);
+  for(let i=0;i<40;i++){
+    const mid = (lo+hi)/2;
+    (R(mid) > goal) ? (lo = mid) : (hi = mid); // R decreases with θ
+  }
+  let theta = (lo+hi)/2;
+
+  // choose bending side: left if target.x < origin.x, right otherwise
+  theta *= (dx < 0 ? 1 : -1);
+
+  // first-segment direction β
+  const alpha = Math.atan2(dy, dx);
+  const beta  = alpha - (n-1)*theta/2;
+
+  // build joint positions
+  joints[0] = {...ORIGIN};
+  let dir = beta;
+  for(let i=1;i<=n;i++){
+    joints[i].x = joints[i-1].x + L*Math.cos(dir);
+    joints[i].y = joints[i-1].y + L*Math.sin(dir);
+    dir += theta;
+  }
+}
+
+/* ───────────────────────────── rendering ──────────────────────────── */
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  // bones
+  ctx.lineWidth = 6;
+  ctx.lineCap   = 'round';
+  ctx.strokeStyle = '#09f';
+  ctx.beginPath();
+  ctx.moveTo(joints[0].x, joints[0].y);
+  for(let i=1;i<joints.length;i++) ctx.lineTo(joints[i].x, joints[i].y);
+  ctx.stroke();
+
+  // joints
+  ctx.fillStyle = '#fff';
+  for(const p of joints){
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 8, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // target
+  ctx.fillStyle = '#f33';
+  ctx.beginPath();
+  ctx.arc(target.x, target.y, 6, 0, Math.PI*2);
+  ctx.fill();
+}
+
+/* ────────────────────── interaction + animation loop ─────────────── */
+function setTarget(evt){
+  const r = canvas.getBoundingClientRect();
+  const p = evt.touches ? evt.touches[0] : evt;
+  target.x = p.clientX - r.left;
+  target.y = p.clientY - r.top;
+}
+addEventListener('pointerdown', setTarget);
+addEventListener('pointermove', e => { if (e.buttons) setTarget(e); });
+
+function resize(){ canvas.width = innerWidth; canvas.height = innerHeight; }
+addEventListener('resize', resize); resize();
+
+(function animate(){
+  solveArc();
+  draw();
+  requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>

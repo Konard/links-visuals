@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Simple FABRIK IK Demo</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#111;font-family:sans-serif;color:#eee}
+canvas{display:block;width:100%;height:100%}
+#info{position:fixed;top:0;left:0;padding:6px 8px;font-size:14px;background:rgba(0,0,0,.5);pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info">Drag (or tap) to move the red target</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx     = canvas.getContext('2d');
+
+// chain setup: root + 3 intermediate + end = 5 joints, 4 equal-length segments
+const SEG_COUNT = 4;
+const SEG_LEN   = 80;
+const lens      = Array(SEG_COUNT).fill(SEG_LEN);
+
+const origin  = {x: innerWidth/2, y: innerHeight*0.75};   // fixed root
+const joints  = Array.from({length: SEG_COUNT+1}, (_,i)=>({
+  x: origin.x,
+  y: origin.y - i*SEG_LEN    // initial straight vertical pose
+}));
+let target = {...joints.at(-1)};                           // movable goal
+
+// --- interaction -----------------------------------------------------------
+function setTarget(evt){
+  const r = canvas.getBoundingClientRect();
+  const p = evt.touches ? evt.touches[0] : evt;
+  target.x = p.clientX - r.left;
+  target.y = p.clientY - r.top;
+}
+addEventListener('pointerdown', setTarget);
+addEventListener('pointermove', e => { if (e.buttons) setTarget(e); });
+
+// --- utility ---------------------------------------------------------------
+const dist = (a,b)=>Math.hypot(b.x-a.x,b.y-a.y);
+
+// --- FABRIK solver ---------------------------------------------------------
+function solve(){
+  const totalLen = lens.reduce((s,l)=>s+l,0);
+  const rootToTarget = dist(origin,target);
+
+  if (rootToTarget > totalLen){                       // unreachable: fully extend
+    const ux = (target.x-origin.x)/rootToTarget;
+    const uy = (target.y-origin.y)/rootToTarget;
+    joints[0] = {...origin};
+    for(let i=1;i<joints.length;i++){
+      joints[i].x = joints[i-1].x + ux*lens[i-1];
+      joints[i].y = joints[i-1].y + uy*lens[i-1];
+    }
+    return;
+  }
+
+  const EPS = 0.5;
+  for(let iter=0; iter<10 && dist(joints.at(-1),target) > EPS; iter++){
+    // forward reaching: set end on target
+    joints.at(-1).x = target.x;
+    joints.at(-1).y = target.y;
+    for(let i=joints.length-2;i>=0;i--){
+      const d = dist(joints[i+1], joints[i]);
+      const r = lens[i]/d;
+      joints[i].x = (1-r)*joints[i+1].x + r*joints[i].x;
+      joints[i].y = (1-r)*joints[i+1].y + r*joints[i].y;
+    }
+    // backward reaching: root snaps back to origin
+    joints[0] = {...origin};
+    for(let i=0;i<joints.length-1;i++){
+      const d = dist(joints[i+1], joints[i]);
+      const r = lens[i]/d;
+      joints[i+1].x = (1-r)*joints[i].x + r*joints[i+1].x;
+      joints[i+1].y = (1-r)*joints[i].y + r*joints[i+1].y;
+    }
+  }
+}
+
+// --- drawing ---------------------------------------------------------------
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  // bones
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = '#0af';
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(joints[0].x, joints[0].y);
+  for(let i=1;i<joints.length;i++) ctx.lineTo(joints[i].x, joints[i].y);
+  ctx.stroke();
+
+  // joints
+  ctx.fillStyle = '#fff';
+  for(const p of joints){
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 8, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // target
+  ctx.fillStyle = '#f33';
+  ctx.beginPath();
+  ctx.arc(target.x, target.y, 6, 0, Math.PI*2);
+  ctx.fill();
+}
+
+// --- boilerplate -----------------------------------------------------------
+function resize(){
+  canvas.width  = innerWidth;
+  canvas.height = innerHeight;
+}
+addEventListener('resize', resize);
+resize();
+
+(function animate(){
+  solve();
+  draw();
+  requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>

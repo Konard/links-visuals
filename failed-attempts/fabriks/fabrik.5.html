@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Constant-Curvature IK – ±45 ° first-segment limit</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#111;font-family:sans-serif;color:#eee}
+canvas{display:block;width:100%;height:100%}
+#info{position:fixed;top:0;left:0;padding:6px 9px;background:rgba(0,0,0,.4);font-size:14px;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info">Drag / tap anywhere above the root.  
+First link is clamped to ± 45 °.</div>
+
+<script>
+/* ─────────────── global constants ─────────────── */
+const SEG_COUNT = 4;                // 4 links
+const SEG_LEN   = 80;               // px
+const ORIGIN    = {x: innerWidth/2, y: innerHeight*0.75};
+const MAX_REACH = SEG_COUNT*SEG_LEN;
+const FIRST_MAX = Math.PI/4;        // 45°
+const FIRST_INIT= -Math.PI/2;       // vertical up (−π/2)
+
+/* ─────────────── state containers ─────────────── */
+const joints     = Array.from({length: SEG_COUNT+1},()=>({x:0,y:0}));
+let   prevJoints = null;
+let   target     = {x: ORIGIN.x, y: ORIGIN.y-SEG_COUNT*SEG_LEN};
+
+/* ───────────── helper: keep target above root ───────────── */
+function clampTarget(x,y){
+  if (y > ORIGIN.y-1) y = ORIGIN.y-1;    // forbid going below root
+  return {x, y};
+}
+
+/* ───────────── mathematics utilities ───────────── */
+const dist2 = (a,b)=> (a.x-b.x)**2 + (a.y-b.y)**2;
+const normAngle = a => {
+  while (a> Math.PI) a-=2*Math.PI;
+  while (a<-Math.PI) a+=2*Math.PI;
+  return a;
+};
+function rotateSet(arr,phi){            // rotate whole chain by φ
+  const s=Math.sin(phi), c=Math.cos(phi);
+  for(const p of arr){
+    const dx=p.x-ORIGIN.x, dy=p.y-ORIGIN.y;
+    p.x = ORIGIN.x + dx*c - dy*s;
+    p.y = ORIGIN.y + dx*s + dy*c;
+  }
+}
+
+/* ───────────── build constant-curvature arc ───────────── */
+function buildArc(thetaAbs, sign, dx, dy){
+  const theta = thetaAbs*sign;
+  const alpha = Math.atan2(dy,dx);
+  const beta  = alpha - (SEG_COUNT-1)*theta/2;
+
+  const out = Array(SEG_COUNT+1);
+  let dir = beta, x = ORIGIN.x, y = ORIGIN.y;
+  out[0] = {x,y};
+  for(let i=1;i<=SEG_COUNT;i++){
+    x += SEG_LEN*Math.cos(dir);
+    y += SEG_LEN*Math.sin(dir);
+    out[i] = {x,y};
+    dir += theta;
+  }
+  return out;
+}
+function chooseArc(arcPos, arcNeg, dx){
+  if (!prevJoints){
+    const posOpp = (arcPos[2].x-ORIGIN.x)*dx < 0;   // opposite side?
+    return posOpp ? arcPos : arcNeg;
+  }
+  const err = arc => arc.reduce((s,p,i)=>s+dist2(p,prevJoints[i]),0);
+  return err(arcPos) < err(arcNeg) ? arcPos : arcNeg;
+}
+
+/* ───────────── main solver ───────────── */
+function solveArc(){
+  const dx = target.x-ORIGIN.x, dy = target.y-ORIGIN.y;
+  const d  = Math.hypot(dx,dy);
+
+  /* straight-line reach when target too far */
+  if (d >= MAX_REACH-1e-3){
+    const ux=dx/d, uy=dy/d;
+    joints[0]={...ORIGIN};
+    for(let i=1;i<=SEG_COUNT;i++){
+      joints[i].x = joints[i-1].x + ux*SEG_LEN;
+      joints[i].y = joints[i-1].y + uy*SEG_LEN;
+    }
+    prevJoints = joints.map(p=>({...p}));
+    return;
+  }
+
+  /* find |θ| via bisection */
+  const goal = d/SEG_LEN;
+  let lo=1e-6, hi=Math.PI*2/SEG_COUNT-1e-6;
+  const R = θ=>Math.sin(SEG_COUNT*θ/2)/Math.sin(θ/2);
+  for(let i=0;i<40;i++){
+    const mid=(lo+hi)/2;
+    (R(mid)>goal) ? (lo=mid) : (hi=mid);
+  }
+  const thetaAbs=(lo+hi)/2;
+
+  /* two bend-sides */
+  const arcPos = buildArc(thetaAbs, 1, dx, dy);
+  const arcNeg = buildArc(thetaAbs,-1, dx, dy);
+  const chosen = chooseArc(arcPos, arcNeg, dx);
+
+  /* ─── FIRST-LINK LIMIT (±45 °) ─── */
+  const firstDir = Math.atan2(
+      chosen[1].y-ORIGIN.y, chosen[1].x-ORIGIN.x);
+  const delta    = normAngle(firstDir - FIRST_INIT);
+
+  if (delta >  FIRST_MAX){
+    rotateSet(chosen, FIRST_MAX - delta);          // rotate CW
+  }else if (delta < -FIRST_MAX){
+    rotateSet(chosen,-FIRST_MAX - delta);          // rotate CCW
+  }
+
+  /* copy to live joints */
+  for(let i=0;i<=SEG_COUNT;i++){
+    joints[i].x = chosen[i].x;
+    joints[i].y = chosen[i].y;
+  }
+  prevJoints = chosen;
+}
+
+/* ───────────── rendering ───────────── */
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  ctx.lineWidth=6; ctx.lineCap='round'; ctx.strokeStyle='#09f';
+  ctx.beginPath(); ctx.moveTo(joints[0].x,joints[0].y);
+  for(let i=1;i<joints.length;i++) ctx.lineTo(joints[i].x,joints[i].y);
+  ctx.stroke();
+
+  ctx.fillStyle='#fff';
+  for(const p of joints){ ctx.beginPath(); ctx.arc(p.x,p.y,8,0,Math.PI*2); ctx.fill(); }
+
+  ctx.fillStyle='#f33';
+  ctx.beginPath(); ctx.arc(target.x,target.y,6,0,Math.PI*2); ctx.fill();
+}
+
+/* ───────────── interaction + loop ───────────── */
+function updateTarget(e){
+  const r=canvas.getBoundingClientRect();
+  const p=e.touches ? e.touches[0] : e;
+  target = clampTarget(p.clientX-r.left, p.clientY-r.top);
+}
+addEventListener('pointerdown', updateTarget);
+addEventListener('pointermove', e=>{ if(e.buttons) updateTarget(e); });
+
+function resize(){canvas.width=innerWidth;canvas.height=innerHeight;}
+addEventListener('resize', resize); resize();
+
+(function loop(){
+  solveArc(); draw(); requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

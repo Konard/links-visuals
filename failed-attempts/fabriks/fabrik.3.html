@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Constant-Curvature IK – continuous & side-opposite</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#111;font-family:sans-serif;color:#eee}
+canvas{display:block;width:100%;height:100%}
+#info{position:fixed;top:0;left:0;padding:6px 9px;background:rgba(0,0,0,.4);font-size:14px;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info">Drag / tap to move the red target</div>
+
+<script>
+/* ───────────────────────── constants ───────────────────────── */
+const SEG_COUNT = 4;               // 4 links → 5 joints
+const SEG_LEN   = 80;              // px
+const ORIGIN    = {x: innerWidth/2, y: innerHeight*0.75};
+const MAX_REACH = SEG_COUNT*SEG_LEN;
+
+/* ────────────────────── state containers ───────────────────── */
+const joints = Array.from({length: SEG_COUNT+1}, ()=>({x:0,y:0}));
+let prevJoints = null;             // previous frame (for continuity)
+let target     = {x: ORIGIN.x, y: ORIGIN.y-SEG_COUNT*SEG_LEN};
+
+/* ─────────────────────── helper functions ──────────────────── */
+const dist2 = (a,b)=> (a.x-b.x)**2 + (a.y-b.y)**2;
+
+/* build the chain for a given |θ| and sign (+1 or −1) */
+function buildArc(thetaAbs, sign, dx, dy){
+  const theta = thetaAbs * sign;
+  const alpha = Math.atan2(dy, dx);           // direction root→target
+  const beta  = alpha - (SEG_COUNT-1)*theta/2;
+
+  const out = Array(SEG_COUNT+1);
+  let dir = beta,  x = ORIGIN.x,  y = ORIGIN.y;
+  out[0] = {x, y};
+
+  for(let i=1;i<=SEG_COUNT;i++){
+    x += SEG_LEN*Math.cos(dir);
+    y += SEG_LEN*Math.sin(dir);
+    out[i] = {x, y};
+    dir += theta;
+  }
+  return out;
+}
+
+/* choose between the two possible bend-sides so that:
+   – on the very first move the chain bends to the side *opposite* the target
+   – afterwards it picks the side closest to the previous pose (no flips) */
+function chooseArc(arcPos, arcNeg, dx){
+  if (!prevJoints){                     // first frame after straight pose
+    const midPosRight = (arcPos[2].x-ORIGIN.x) * dx < 0; // opposite side?
+    return midPosRight ? arcPos : arcNeg;
+  }
+  // continuity: smaller squared-error to previous frame wins
+  const errPos = arcPos.reduce((s,p,i)=>s+dist2(p,prevJoints[i]),0);
+  const errNeg = arcNeg.reduce((s,p,i)=>s+dist2(p,prevJoints[i]),0);
+  return errPos < errNeg ? arcPos : arcNeg;
+}
+
+/* ─────────────────── constant-curvature solver ─────────────────── */
+function solveArc(){
+  const dx = target.x-ORIGIN.x,  dy = target.y-ORIGIN.y;
+  const d  = Math.hypot(dx,dy);
+
+  /* unreachable – fully straight toward the goal */
+  if (d >= MAX_REACH-1e-3){
+    const ux = dx/d,  uy = dy/d;
+    joints[0] = {...ORIGIN};
+    for(let i=1;i<=SEG_COUNT;i++){
+      joints[i].x = joints[i-1].x + ux*SEG_LEN;
+      joints[i].y = joints[i-1].y + uy*SEG_LEN;
+    }
+    prevJoints = joints.map(p=>({...p}));
+    return;
+  }
+
+  /* find |θ| that satisfies  |target| = L·R(|θ|)  with bisection  */
+  const goal = d / SEG_LEN;
+  let lo = 1e-6,  hi = Math.PI*2/SEG_COUNT - 1e-6;      // search in (0, 2π/n)
+  const R = θ => Math.sin(SEG_COUNT*θ/2)/Math.sin(θ/2);
+
+  for(let i=0;i<40;i++){
+    const mid = (lo+hi)/2;
+    (R(mid) > goal) ? (lo = mid) : (hi = mid);
+  }
+  const thetaAbs = (lo+hi)/2;
+
+  /* build both possible arcs – bend left vs bend right */
+  const arcPos = buildArc(thetaAbs,  1, dx, dy);
+  const arcNeg = buildArc(thetaAbs, -1, dx, dy);
+
+  /* choose the one that obeys “opposite side” on first move,
+     or is closer to the previous pose afterwards                */
+  const chosen = chooseArc(arcPos, arcNeg, dx);
+
+  /* copy into the live joint array and remember for next frame */
+  for(let i=0;i<=SEG_COUNT;i++){
+    joints[i].x = chosen[i].x;
+    joints[i].y = chosen[i].y;
+  }
+  prevJoints = chosen;
+}
+
+/* ───────────────────────── rendering ───────────────────────── */
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  // bones
+  ctx.lineWidth = 6;
+  ctx.lineCap   = 'round';
+  ctx.strokeStyle = '#09f';
+  ctx.beginPath();
+  ctx.moveTo(joints[0].x, joints[0].y);
+  for(let i=1;i<joints.length;i++) ctx.lineTo(joints[i].x, joints[i].y);
+  ctx.stroke();
+
+  // joints
+  ctx.fillStyle = '#fff';
+  for(const p of joints){
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 8, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // target
+  ctx.fillStyle = '#f33';
+  ctx.beginPath();
+  ctx.arc(target.x, target.y, 6, 0, Math.PI*2);
+  ctx.fill();
+}
+
+/* ────────────────── interaction + animation loop ───────────────── */
+function setTarget(evt){
+  const r = canvas.getBoundingClientRect();
+  const p = evt.touches ? evt.touches[0] : evt;
+  target.x = p.clientX - r.left;
+  target.y = p.clientY - r.top;
+}
+addEventListener('pointerdown', setTarget);
+addEventListener('pointermove', e => { if (e.buttons) setTarget(e); });
+
+function resize(){ canvas.width = innerWidth; canvas.height = innerHeight; }
+addEventListener('resize', resize); resize();
+
+(function animate(){
+  solveArc();   // update IK
+  draw();       // render
+  requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>

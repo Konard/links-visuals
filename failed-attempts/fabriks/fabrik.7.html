@@ -1,0 +1,186 @@
+<!--
+Animation Requirements
+======================
+1. **Interaction:** Drag or tap anywhere *above* the root joint (the large white dot near the bottom-center).
+2. **First-joint limit:** The first segment is initially aimed straight downward and is clamped to ±45 ° from that orientation.
+3. **Side memory & hysteresis:** The solver remembers which side (left/right) it last chose and will only switch if the opposite side brings the end-effector at least 20 px closer.
+4. **Reachable vs. unreachable:**
+   • If the target is within reach, an analytic constant-curvature solution is used.  
+   • If not, the solver sweeps 300 candidate curvatures and picks the closest.
+5. **Continuous motion:** The scene re-solves and redraws every animation frame for smooth, 60 fps motion.
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Constant-Curvature IK – side memory with 20 px hysteresis</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#111;font-family:sans-serif;color:#eee}
+canvas{display:block;width:100%;height:100%}
+#info{position:fixed;top:0;left:0;padding:6px 9px;background:rgba(0,0,0,.4);font-size:14px;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info">Drag / tap above the root. First link ≤ 45°, chain prefers the side it’s on unless the other is &gt;20 px closer.</div>
+
+<script>
+/***** CONSTANTS *****/
+const SEGMENT_COUNT                 = 4;
+const SEGMENT_LENGTH                = 80;
+const ROOT_ORIGIN                   = {x: innerWidth/2, y: innerHeight*0.75};
+const MAXIMUM_REACH                 = SEGMENT_COUNT * SEGMENT_LENGTH;
+const FIRST_JOINT_INITIAL_ANGLE     = -Math.PI / 2;
+const FIRST_JOINT_MAX_DELTA         = Math.PI / 4;
+const SIDE_SWITCH_TOLERANCE         = 20;        // px improvement to flip side
+const SWEEP_SAMPLE_STEPS            = 300;       // θ samples when unreachable
+
+/***** STATE *****/
+const jointPositions = Array.from({length: SEGMENT_COUNT + 1}, () => ({x: 0, y: 0}));
+let preferredSideSign = 0;                       // +1 or -1 once chosen
+let currentTarget     = {x: ROOT_ORIGIN.x, y: ROOT_ORIGIN.y - SEGMENT_COUNT * SEGMENT_LENGTH};
+
+/***** HELPERS *****/
+const normalizeAngle = a => {while (a >  Math.PI) a -= 2 * Math.PI;
+                             while (a < -Math.PI) a += 2 * Math.PI;
+                             return a;};
+function clampTargetPosition(x, y) {return {x, y: Math.min(y, ROOT_ORIGIN.y - 1)};}
+function rotateAroundOrigin(pointArray, phi) {
+  const s = Math.sin(phi), c = Math.cos(phi);
+  for (const p of pointArray) {
+    const dx = p.x - ROOT_ORIGIN.x, dy = p.y - ROOT_ORIGIN.y;
+    p.x = ROOT_ORIGIN.x + dx * c - dy * s;
+    p.y = ROOT_ORIGIN.y + dx * s + dy * c;
+  }
+}
+
+/***** ARC BUILDERS *****/
+function buildArcFixedIncrement(thetaAbsolute, sideSign, baseAngle) {
+  const arc = [{x: ROOT_ORIGIN.x, y: ROOT_ORIGIN.y}];
+  let direction = baseAngle, x = ROOT_ORIGIN.x, y = ROOT_ORIGIN.y;
+  for (let i = 1; i <= SEGMENT_COUNT; i++) {
+    x += SEGMENT_LENGTH * Math.cos(direction);
+    y += SEGMENT_LENGTH * Math.sin(direction);
+    arc[i] = {x, y};
+    direction += sideSign * thetaAbsolute;
+  }
+  return arc;
+}
+function buildArc(thetaAbsolute, sideSign, dx, dy) {
+  const theta = thetaAbsolute * sideSign;
+  const beta  = Math.atan2(dy, dx) - (SEGMENT_COUNT - 1) * theta / 2;
+  return buildArcFixedIncrement(thetaAbsolute, sideSign, beta);
+}
+function clampFirstJoint(arc) {
+  const firstDir = Math.atan2(arc[1].y - ROOT_ORIGIN.y, arc[1].x - ROOT_ORIGIN.x);
+  const delta    = normalizeAngle(firstDir - FIRST_JOINT_INITIAL_ANGLE);
+  if (delta >  FIRST_JOINT_MAX_DELTA) rotateAroundOrigin(arc,  FIRST_JOINT_MAX_DELTA - delta);
+  if (delta < -FIRST_JOINT_MAX_DELTA) rotateAroundOrigin(arc, -FIRST_JOINT_MAX_DELTA - delta);
+}
+
+/***** BEST ARC FOR SIDE (unreachable) *****/
+function bestArcForSide(sideSign, baseAngle) {
+  let bestArc = null, bestDist = Infinity;
+  const thetaMax = Math.PI * 2 / SEGMENT_COUNT - 1e-4;
+  for (let i = 0; i <= SWEEP_SAMPLE_STEPS; i++) {
+    const theta = i * thetaMax / SWEEP_SAMPLE_STEPS;
+    const arc   = buildArcFixedIncrement(theta, sideSign, baseAngle);
+    const end   = arc[SEGMENT_COUNT];
+    const dist  = Math.hypot(end.x - currentTarget.x, end.y - currentTarget.y);
+    if (dist < bestDist) {bestDist = dist; bestArc = arc;}
+  }
+  clampFirstJoint(bestArc);
+  return {arc: bestArc, dist: bestDist};
+}
+
+/***** SOLVER *****/
+function solveInverseKinematics() {
+  const dx = currentTarget.x - ROOT_ORIGIN.x,
+        dy = currentTarget.y - ROOT_ORIGIN.y,
+        d  = Math.hypot(dx, dy);
+  if (preferredSideSign === 0) preferredSideSign = dx < 0 ? 1 : -1;   // start opposite target side
+
+  // analytic θ for reachable or trimmed dist for unreachable
+  const effectiveDistance = Math.min(d, MAXIMUM_REACH);
+  let lo = 1e-6, hi = Math.PI * 2 / SEGMENT_COUNT - 1e-6;
+  const radiusFn = θ => Math.sin(SEGMENT_COUNT * θ / 2) / Math.sin(θ / 2);
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2;
+    (radiusFn(mid) > effectiveDistance / SEGMENT_LENGTH) ? (lo = mid) : (hi = mid);
+  }
+  const thetaAbs = (lo + hi) / 2;
+
+  let leftCand, rightCand;
+  if (d < MAXIMUM_REACH - 1e-3) {                         // REACHABLE
+    leftCand  = {arc: buildArc(thetaAbs,  1, dx, dy)}; clampFirstJoint(leftCand.arc);
+    rightCand = {arc: buildArc(thetaAbs, -1, dx, dy)}; clampFirstJoint(rightCand.arc);
+
+    const eL = leftCand.arc[SEGMENT_COUNT],
+          eR = rightCand.arc[SEGMENT_COUNT];
+    leftCand.dist  = Math.hypot(eL.x - currentTarget.x, eL.y - currentTarget.y);
+    rightCand.dist = Math.hypot(eR.x - currentTarget.x, eR.y - currentTarget.y);
+  } else {                                                // UNREACHABLE sweep
+    const baseAngle = Math.max(
+      FIRST_JOINT_INITIAL_ANGLE - FIRST_JOINT_MAX_DELTA,
+      Math.min(
+        FIRST_JOINT_INITIAL_ANGLE + FIRST_JOINT_MAX_DELTA,
+        Math.atan2(dy, dx)
+      )
+    );
+    leftCand  = bestArcForSide( 1, baseAngle);
+    rightCand = bestArcForSide(-1, baseAngle);
+  }
+
+  const cur  = preferredSideSign > 0 ? leftCand  : rightCand,
+        oth  = preferredSideSign > 0 ? rightCand : leftCand;
+  if (oth.dist < cur.dist - SIDE_SWITCH_TOLERANCE) preferredSideSign *= -1;
+
+  const chosenArc = preferredSideSign > 0 ? leftCand.arc : rightCand.arc;
+  for (let i = 0; i <= SEGMENT_COUNT; i++) jointPositions[i] = chosenArc[i];
+}
+
+/***** RENDER & LOOP *****/
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+
+function drawFrame() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  ctx.lineWidth   = 6;
+  ctx.lineCap     = 'round';
+  ctx.strokeStyle = '#09f';
+  ctx.beginPath();
+  ctx.moveTo(jointPositions[0].x, jointPositions[0].y);
+  for (let i = 1; i < jointPositions.length; i++) ctx.lineTo(jointPositions[i].x, jointPositions[i].y);
+  ctx.stroke();
+
+  ctx.fillStyle = '#fff';
+  for (const p of jointPositions) {
+    ctx.beginPath(); ctx.arc(p.x, p.y, 8, 0, Math.PI * 2); ctx.fill();
+  }
+
+  ctx.fillStyle = '#f33';
+  ctx.beginPath(); ctx.arc(currentTarget.x, currentTarget.y, 6, 0, Math.PI * 2); ctx.fill();
+}
+
+function updateTarget(event) {
+  const rect    = canvas.getBoundingClientRect();
+  const pointer = event.touches ? event.touches[0] : event;
+  currentTarget = clampTargetPosition(pointer.clientX - rect.left, pointer.clientY - rect.top);
+}
+addEventListener('pointerdown', updateTarget);
+addEventListener('pointermove', e => {if (e.buttons) updateTarget(e);});
+
+function resizeCanvas() {canvas.width = innerWidth; canvas.height = innerHeight;}
+addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+(function animationLoop() {
+  solveInverseKinematics();
+  drawFrame();
+  requestAnimationFrame(animationLoop);
+})();
+</script>
+</body>
+</html>
