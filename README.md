@@ -6,5 +6,5 @@ Visuals of links
 
 ## Thanks to:
 
-* The Continuity of Splines: https://youtu.be/jvPPXbo87ds
-* A simple procedural animation technique: https://youtu.be/qlfh_rv6khY
+* "The Continuity of Splines" by [Freya Holmér](https://www.youtube.com/@acegikmo) : https://youtu.be/jvPPXbo87ds
+* "A simple procedural animation technique" by [@argonaut](https://www.youtube.com/@argonautcode): https://youtu.be/qlfh_rv6khY
