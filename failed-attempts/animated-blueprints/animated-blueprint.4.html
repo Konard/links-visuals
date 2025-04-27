@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Link blueprint – constant-curvature IK</title>
+
+  <!-- original behaviour spec left as-is -->
+
+  <style>
+    html,body{margin:0;padding:0;background:#E0F7FA;height:100%;overflow:hidden}
+    svg{display:block}
+    #coordinates{
+      position:fixed;bottom:10px;left:10px;
+      background:rgba(0,0,128,.5);color:#fff;
+      padding:10px;font:12px/1.3 "Consolas","Courier New",monospace;
+      border-radius:5px;white-space:pre
+    }
+  </style>
+</head>
+<body>
+  <div id="coordinates"></div>
+
+  <script type="module">
+    const { use } = await import("https://esm.sh/use-m");
+    (async () => {
+      const d3 = await use('d3');
+
+      /* -----------------------------------------------------------------------
+         ORIGINAL CONSTANTS / STATE
+      ----------------------------------------------------------------------- */
+      const basePadding   = 155;
+      const snapThreshold = 20;
+      const circleRadius  = 24;
+
+      let width, height, cx, cy, gridSpacing, halfSpacing;
+
+      const svg       = d3.select("body").append("svg");
+      const gridGroup = svg.insert("g", ":first-child");
+
+      const points = [
+        { id:"start",  xFactor:-4, initialFactor:-4, yFactor:0, type:"endpoint",    draggable:true,  z:1 },
+        { id:"p1",     xFactor:-3, initialFactor:-3, yFactor:0, type:"intermediate",draggable:true,  z:2 },
+        { id:"p2",     xFactor:-2, initialFactor:-2, yFactor:0, type:"intermediate",draggable:true,  z:3 },
+        { id:"p3",     xFactor:-1, initialFactor:-1, yFactor:0, type:"intermediate",draggable:true,  z:4 },
+        { id:"center", xFactor: 0, initialFactor: 0, yFactor:0, type:"center",      draggable:false, z:0 },
+        { id:"p4",     xFactor: 1, initialFactor: 1, yFactor:0, type:"intermediate",draggable:true,  z:5 },
+        { id:"p5",     xFactor: 2, initialFactor: 2, yFactor:0, type:"intermediate",draggable:true,  z:6 },
+        { id:"p6",     xFactor: 3, initialFactor: 3, yFactor:0, type:"intermediate",draggable:true,  z:7 },
+        { id:"end",    xFactor: 4, initialFactor: 4, yFactor:0, type:"endpoint",    draggable:true,  z:8 }
+      ];
+      const byId = Object.fromEntries(points.map(p => [p.id, p]));
+
+      /* ------------------------ (grid / HUD unchanged) ---------------------- */
+
+      /* -----------------------------------------------------------------------
+         MARKERS – exactly the originals
+      ----------------------------------------------------------------------- */
+      const defs = svg.append("defs");
+      defs.append("marker")
+          .attr("id","cross-marker").attr("viewBox","0 0 100 100")
+          .attr("markerWidth",100).attr("markerHeight",100)
+          .attr("refX",50).attr("refY",50).attr("orient","auto")
+        .append("g")
+          .call(g=>{
+            g.append("line")
+             .attr("x1",62.5-(12.5-12.5/1.618)).attr("y1",25+14.5-.23)
+             .attr("x2",62.5-(12.5-12.5/1.618)).attr("y2",75-14.5+.23)
+             .attr("stroke","black");
+          });
+      defs.append("marker")
+          .attr("id","arrow-marker").attr("viewBox","0 0 100 100")
+          .attr("markerWidth",100).attr("markerHeight",100)
+          .attr("refX",10).attr("refY",50).attr("orient","auto")
+        .append("g")
+          .call(g=>{
+            g.append("line")
+             .attr("x1",10+.35).attr("y1",50+.35).attr("x2",0-.35).attr("y2",40-.35)
+             .attr("stroke","black");
+            g.append("line")
+             .attr("x1",10+.35).attr("y1",50-.35).attr("x2",0-.35).attr("y2",60+.35)
+             .attr("stroke","black");
+          });
+
+      const mainPath = svg.append("path")
+        .attr("fill","none").attr("stroke","black").attr("stroke-width",12)
+        .attr("marker-start","url(#cross-marker)").attr("marker-end","url(#arrow-marker)");
+
+      /* -----------------------------------------------------------------------
+         CONTROL CIRCLES & DRAG
+      ----------------------------------------------------------------------- */
+      let animationEnabled = false;
+
+      let circles = svg.selectAll("circle.control")
+        .data(points,d=>d.id)
+        .enter()
+        .append("circle")
+        .attr("class",d=>"control "+d.id)
+        .attr("r",circleRadius)
+        .attr("fill","rgba(0,0,0,0)")
+        .attr("stroke-dasharray","4 2")
+        .attr("stroke",d=>{
+          if(d.type==="center")return"black";
+          if(d.type==="endpoint")return d.id==="start"?"green":"red";
+          return"blue";
+        });
+
+      circles.filter(d=>d.draggable).call(d3.drag()
+        .on("start",function(_,d){
+          d3.select(this).attr("stroke-dasharray",null);
+          if(d.id==="start"||d.id==="end") animationEnabled=true;
+        })
+        .on("drag",function(ev,d){
+          const nx=cx+Math.round((ev.x-cx)/halfSpacing)*halfSpacing,
+                ny=cy+Math.round((ev.y-cy)/halfSpacing)*halfSpacing,
+                dist=Math.hypot(ev.x-nx,ev.y-ny);
+          d.x=dist<snapThreshold?nx:ev.x;
+          d.y=dist<snapThreshold?ny:ev.y;
+          d3.select(this).attr("cx",d.x).attr("cy",d.y);
+          updatePath();
+        })
+        .on("end",function(_,d){
+          d.xFactor=(d.x-cx)/gridSpacing;
+          d.yFactor=(d.y-cy)/gridSpacing;
+          d3.select(this).attr("stroke-dasharray","4 2");
+        }));
+
+      /* -----------------------------------------------------------------------
+         SPLINE (unchanged)
+      ----------------------------------------------------------------------- */
+      const add=(v,w)=>({x:v.x+w.x,y:v.y+w.y}),
+            sub=(v,w)=>({x:v.x-w.x,y:v.y-w.y}),
+            scale=(v,s)=>({x:v.x*s,y:v.y*s});
+      function updatePath(){
+        const tan=points.map((p,i)=>i===0?sub(points[1],p):
+                     i===points.length-1?sub(p,points[i-1]):
+                     scale(sub(points[i+1],points[i-1]),.5));
+        let d=`M ${points[0].x} ${points[0].y} `;
+        for(let i=0;i<points.length-1;i++){
+          const cp1=add(points[i],scale(tan[i],1/3)),
+                cp2=sub(points[i+1],scale(tan[i+1],1/3));
+          d+=`C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${points[i+1].x} ${points[i+1].y} `;
+        }
+        mainPath.attr("d",d); updateHUD();
+      }
+
+      /* ===========================================================
+         CONSTANT-CURVATURE IK  (unchanged maths)
+      =========================================================== */
+      const SEG_COUNT=4, SEG_LEN=80, MAX_REACH=SEG_COUNT*SEG_LEN,
+            FIRST_INIT_ANGLE=0, FIRST_MAX_DELTA=Math.PI/2,
+            SIDE_TOLERANCE=.1, SWEEP_STEPS=300;
+      const normA=a=>{while(a> Math.PI)a-=2*Math.PI;while(a<-Math.PI)a+=2*Math.PI;return a;};
+
+      function buildArcFixed(thAbs,side,base,root){
+        const arc=[{...root}], th=thAbs*side; let dir=base,x=root.x,y=root.y;
+        for(let i=1;i<=SEG_COUNT;i++){
+          x+=SEG_LEN*Math.cos(dir); y+=SEG_LEN*Math.sin(dir);
+          arc[i]={x,y}; dir+=th;
+        }
+        return arc;
+      }
+      function buildArc(thAbs,side,dx,dy,root){
+        const th=thAbs*side,
+              beta=Math.atan2(dy,dx)-(SEG_COUNT-1)*th/2;
+        return buildArcFixed(thAbs,side,beta,root);
+      }
+      function rot(pts,phi,root){
+        const s=Math.sin(phi),c=Math.cos(phi);
+        for(const p of pts){
+          const dx=p.x-root.x,dy=p.y-root.y;
+          p.x=root.x+dx*c-dy*s; p.y=root.y+dx*s+dy*c;
+        }
+      }
+      function clampFirst(arc,root,max=FIRST_MAX_DELTA){
+        const dir=Math.atan2(arc[1].y-root.y,arc[1].x-root.x),
+              d=normA(dir-FIRST_INIT_ANGLE);
+        if(d> max)rot(arc, max-d,root);
+        if(d<-max)rot(arc,-max-d,root);
+      }
+      function bestArc(side,base,root,target){
+        let best=null,bd=Infinity, tMax=Math.PI*2/SEG_COUNT-1e-4;
+        for(let i=0;i<=SWEEP_STEPS;i++){
+          const th=i*tMax/SWEEP_STEPS,
+                arc=buildArcFixed(th,side,base,root),
+                end=arc[SEG_COUNT],
+                dist=Math.hypot(end.x-target.x,end.y-target.y);
+          if(dist<bd){bd=dist;best=arc;}
+        }
+        clampFirst(best,root); return{arc:best,dist:bd};
+      }
+      let preferLeft=0,preferRight=0;
+      function solveIK(root,target,sidePref){
+        const dx=target.x-root.x,dy=target.y-root.y,d=Math.hypot(dx,dy);
+        if(sidePref===0) sidePref=dy<0?1:-1;
+        const eff=Math.min(d,MAX_REACH);
+
+        let lo=1e-6,hi=Math.PI*2/SEG_COUNT-1e-6;
+        const R=θ=>Math.sin(SEG_COUNT*θ/2)/Math.sin(θ/2);
+        for(let i=0;i<40;i++){
+          const m=(lo+hi)/2; (R(m)>eff/SEG_LEN)?(lo=m):(hi=m);
+        }
+        const thAbs=(lo+hi)/2;
+
+        let up,down;
+        if(d<MAX_REACH*.82-1e-3){
+          up ={arc:buildArc(thAbs, 1,dx,dy,root)};
+          down={arc:buildArc(thAbs,-1,dx,dy,root)};
+          clampFirst(up.arc,root,FIRST_MAX_DELTA/2);
+          clampFirst(down.arc,root,FIRST_MAX_DELTA/2);
+          up.dist=Math.hypot(up.arc[SEG_COUNT].x-target.x,  up.arc[SEG_COUNT].y-target.y);
+          down.dist=Math.hypot(down.arc[SEG_COUNT].x-target.x,down.arc[SEG_COUNT].y-target.y);
+        }else if(d<MAX_REACH-1e-3){
+          up ={arc:buildArc(thAbs, 1,dx,dy,root)};
+          down={arc:buildArc(thAbs,-1,dx,dy,root)};
+          clampFirst(up.arc,root); clampFirst(down.arc,root);
+          up.dist=Math.hypot(up.arc[SEG_COUNT].x-target.x,  up.arc[SEG_COUNT].y-target.y);
+          down.dist=Math.hypot(down.arc[SEG_COUNT].x-target.x,down.arc[SEG_COUNT].y-target.y);
+        }else{
+          const base=Math.max(FIRST_INIT_ANGLE-FIRST_MAX_DELTA,
+                              Math.min(FIRST_INIT_ANGLE+FIRST_MAX_DELTA,Math.atan2(dy,dx)));
+          up =bestArc( 1,base,root,target);
+          down=bestArc(-1,base,root,target);
+        }
+        const cur=sidePref>0?up:down, oth=sidePref>0?down:up;
+        if(oth.dist<cur.dist-SIDE_TOLERANCE) sidePref*=-1;
+        return{arc:(sidePref>0?up.arc:down.arc),preferredSide:sidePref};
+      }
+
+      /* ---------- NEW: scale arc so its end exactly matches target ---------- */
+      function scaleArcToTarget(arc,root,target){
+        const end=arc[SEG_COUNT],
+              dArc=Math.hypot(end.x-root.x,end.y-root.y),
+              dTar=Math.hypot(target.x-root.x,target.y-root.y);
+        if(dArc<1e-3) return;                          // avoid /0
+        const k=dTar/dArc;
+        for(let i=1;i<=SEG_COUNT;i++){
+          arc[i].x=root.x+(arc[i].x-root.x)*k;
+          arc[i].y=root.y+(arc[i].y-root.y)*k;
+        }
+      }
+
+      /* -----------------------------------------------------------------------
+         UPDATE INTERMEDIATE JOINTS
+      ----------------------------------------------------------------------- */
+      function updateIntermediateViaIK(){
+        if(!animationEnabled) return;
+
+        const root={x:byId.center.x,y:byId.center.y};
+
+        /* ---- LEFT CHAIN (mirror if needed) */
+        const tgtL={x:byId.start.x,y:byId.start.y}, mirrored=tgtL.x<root.x,
+              tL=mirrored?{x:2*root.x-tgtL.x,y:tgtL.y}:tgtL;
+        let resL=solveIK(root,tL,preferLeft); preferLeft=resL.preferredSide;
+        scaleArcToTarget(resL.arc,root,tL);            // << NEW
+        const arcL=mirrored?resL.arc.map(p=>({x:2*root.x-p.x,y:p.y})):resL.arc;
+        byId.p3.x=arcL[1].x; byId.p3.y=arcL[1].y;
+        byId.p2.x=arcL[2].x; byId.p2.y=arcL[2].y;
+        byId.p1.x=arcL[3].x; byId.p1.y=arcL[3].y;
+
+        /* ---- RIGHT CHAIN */
+        const tgtR={x:byId.end.x,y:byId.end.y};
+        let resR=solveIK(root,tgtR,preferRight); preferRight=resR.preferredSide;
+        scaleArcToTarget(resR.arc,root,tgtR);          // << NEW
+        const arcR=resR.arc;
+        byId.p4.x=arcR[1].x; byId.p4.y=arcR[1].y;
+        byId.p5.x=arcR[2].x; byId.p5.y=arcR[2].y;
+        byId.p6.x=arcR[3].x; byId.p6.y=arcR[3].y;
+      }
+
+      /* ---------------------- (resize & loop unchanged) ---------------------- */
+      function resize(){
+        width=innerWidth; height=innerHeight;
+        cx=width/2; cy=height/2;
+        gridSpacing=(cx-basePadding)/4; halfSpacing=gridSpacing/2;
+
+        svg.attr("width",width).attr("height",height); // drawGrid();
+        points.forEach(d=>{d.x=cx+d.xFactor*gridSpacing; d.y=cy+d.yFactor*gridSpacing;});
+        circles.data(points).attr("cx",d=>d.x).attr("cy",d=>d.y);
+        if(animationEnabled) updateIntermediateViaIK();
+        updatePath();
+      }
+      addEventListener("resize",resize); resize();
+
+      (function loop(){
+        updateIntermediateViaIK();
+        if(animationEnabled){
+          circles.data(points).attr("cx",d=>d.x).attr("cy",d=>d.y);
+          updatePath();
+        }
+        requestAnimationFrame(loop);
+      })();
+    })();
+  </script>
+</body>
+</html>

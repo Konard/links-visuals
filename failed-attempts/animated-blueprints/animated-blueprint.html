@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Link blueprint – FABRIK-driven</title>
+
+  <!--
+  REQUIREMENTS / BEHAVIOUR SPEC — LINK BLUEPRINT  (unchanged text omitted)
+  --------------------------------------------------------------------------------
+  • New: the six blue “intermediate” points are now **IK joints** driven by a
+    FABRIK solver.  Only the green “start” and red “end” anchors remain draggable.
+  • Each half-link (start→center, center→end) is solved as a 4-segment chain at
+    every drag and on window-resize, preserving C¹ continuity of the spline.
+  • Segment lengths are the original (grid-scaled) distances and are recomputed
+    after every resize so the link stays perfectly fluid.
+  --------------------------------------------------------------------------------->
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #E0F7FA;
+      height: 100%;
+      overflow: hidden;
+    }
+    svg { display:block; }
+    #coordinates{
+      position:fixed;bottom:10px;left:10px;
+      background:rgba(0,0,128,.5);color:#fff;
+      padding:10px;font:12px/1.4 "Consolas","Courier New",monospace;
+      border-radius:5px;white-space:pre;
+    }
+  </style>
+</head>
+<body>
+  <div id="coordinates"></div>
+  <script type="module">
+    const { use } = await import("https://esm.sh/use-m");
+    (async () => {
+      const d3 = await use('d3');
+
+      /* ---------- CONSTANTS & GLOBALS ---------- */
+      const basePadding    = 155;
+      const snapThreshold  = 20;
+      const circleRadius   = 24;
+      let   width, height, cx, cy, gridSpacing, halfSpacing;
+
+      /* ---------- SVG & GRID ---------- */
+      const svg       = d3.select("body").append("svg");
+      const gridGroup = svg.insert("g", ":first-child");
+
+      /* ---------- POINT DEFINITIONS ---------- */
+      const points = [
+        {id:"start",  initialFactor:-4,xFactor:-4,yFactor:0,type:"endpoint",   draggable:true,  z:1},
+        {id:"p1",     initialFactor:-3,xFactor:-3,yFactor:0,type:"intermediate",draggable:false,z:2},
+        {id:"p2",     initialFactor:-2,xFactor:-2,yFactor:0,type:"intermediate",draggable:false,z:3},
+        {id:"p3",     initialFactor:-1,xFactor:-1,yFactor:0,type:"intermediate",draggable:false,z:4},
+        {id:"center", initialFactor: 0,xFactor: 0,yFactor:0,type:"center",      draggable:false,z:0},
+        {id:"p4",     initialFactor: 1,xFactor: 1,yFactor:0,type:"intermediate",draggable:false,z:5},
+        {id:"p5",     initialFactor: 2,xFactor: 2,yFactor:0,type:"intermediate",draggable:false,z:6},
+        {id:"p6",     initialFactor: 3,xFactor: 3,yFactor:0,type:"intermediate",draggable:false,z:7},
+        {id:"end",    initialFactor: 4,xFactor: 4,yFactor:0,type:"endpoint",    draggable:true, z:8}
+      ];
+
+      /* ----- Convenience handles for IK chains ----- */
+      const leftChain  = [points[0], points[1], points[2], points[3], points[4]]; // start→center
+      const rightChain = [points[4], points[5], points[6], points[7], points[8]]; // center→end
+      let   leftLens   = [], rightLens = [];                                       // per-segment lengths
+
+      /* ---------- GRID (unchanged) ---------- */
+      function drawGrid() {
+        gridGroup.selectAll("*").remove();
+        const minor = gridGroup.append("g"), major = gridGroup.append("g");
+        const startXmin = cx + Math.floor((0 - cx)/halfSpacing)*halfSpacing,
+              endXmin   = cx + Math.ceil ((width-cx)/halfSpacing)*halfSpacing;
+        for (let x=startXmin;x<=endXmin;x+=halfSpacing)
+          if (Math.abs((x-cx)%gridSpacing)>0.1)
+            minor.append("line").attr("x1",x).attr("y1",0).attr("x2",x).attr("y2",height)
+                 .attr("stroke","white").attr("stroke-width",0.5).attr("opacity",0.5);
+        const startYmin = cy + Math.floor((0 - cy)/halfSpacing)*halfSpacing,
+              endYmin   = cy + Math.ceil ((height-cy)/halfSpacing)*halfSpacing;
+        for (let y=startYmin;y<=endYmin;y+=halfSpacing)
+          if (Math.abs((y-cy)%gridSpacing)>0.1)
+            minor.append("line").attr("x1",0).attr("y1",y).attr("x2",width).attr("y2",y)
+                 .attr("stroke","white").attr("stroke-width",0.5).attr("opacity",0.5);
+
+        const startXmaj = cx + Math.floor((0 - cx)/gridSpacing)*gridSpacing,
+              endXmaj   = cx + Math.ceil ((width-cx)/gridSpacing)*gridSpacing;
+        for (let x=startXmaj;x<=endXmaj;x+=gridSpacing)
+          major.append("line").attr("x1",x).attr("y1",0).attr("x2",x).attr("y2",height)
+               .attr("stroke","white").attr("stroke-width",1).attr("opacity",0.8);
+        const startYmaj = cy + Math.floor((0 - cy)/gridSpacing)*gridSpacing,
+              endYmaj   = cy + Math.ceil ((height-cy)/gridSpacing)*gridSpacing;
+        for (let y=startYmaj;y<=endYmaj;y+=gridSpacing)
+          major.append("line").attr("x1",0).attr("y1",y).attr("x2",width).attr("y2",y)
+               .attr("stroke","white").attr("stroke-width",1).attr("opacity",0.8);
+      }
+
+      /* ---------- DEBUG HUD ---------- */
+      const fmt = n => (n<0?'-':'')+String(Math.round(Math.abs(n))).padStart(3,'0');
+      function updateHUD(){
+        document.getElementById("coordinates").textContent =
+          points.map(p=>`${p.id.padEnd(6)}: (${fmt(p.x)}, ${fmt(p.y)})  z=${String(p.z).padStart(3,'0')}`)
+                .join("\n");
+      }
+
+      /* ---------- SVG MARKERS & MAIN PATH (unchanged) ---------- */
+      const defs = svg.append("defs");
+      defs.append("marker").attr("id","cross-marker").attr("viewBox","0 0 100 100")
+          .attr("markerWidth",100).attr("markerHeight",100).attr("refX",50).attr("refY",50)
+          .append("line").attr("x1",50).attr("y1",30).attr("x2",50).attr("y2",70).attr("stroke","black");
+      defs.append("marker").attr("id","arrow-marker").attr("viewBox","0 0 100 100")
+          .attr("markerWidth",100).attr("markerHeight",100).attr("refX",10).attr("refY",50).attr("orient","auto")
+        .call(g=>{
+          g.append("line").attr("x1",10).attr("y1",50).attr("x2",0).attr("y2",40).attr("stroke","black");
+          g.append("line").attr("x1",10).attr("y1",50).attr("x2",0).attr("y2",60).attr("stroke","black");
+        });
+
+      const mainPath = svg.append("path")
+                          .attr("fill","none")
+                          .attr("stroke","black")
+                          .attr("stroke-width",12)
+                          .attr("marker-start","url(#cross-marker)")
+                          .attr("marker-end","url(#arrow-marker)");
+
+      /* ---------- VECTOR HELPERS ---------- */
+      const add  = (a,b)=>({x:a.x+b.x,y:a.y+b.y});
+      const sub  = (a,b)=>({x:a.x-b.x,y:a.y-b.y});
+      const scl  = (v,s)=>({x:v.x*s,y:v.y*s});
+      const dist = (a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+
+      /* ---------- FABRIK SOLVER (per-chain) ---------- */
+      function fabrik(chain, lens, target, maxIter=10, tol=0.5){
+        const n = chain.length, root0={x:chain[0].x,y:chain[0].y};
+        /* unreachable? → straight-line solution */
+        const totalLen = lens.reduce((a,b)=>a+b,0);
+        if (dist(root0,target) > totalLen){
+          for(let i=1;i<n;i++){
+            const r = lens.slice(0,i).reduce((a,b)=>a+b,0),
+                  f = r/dist(root0,target);
+            chain[i].x = root0.x + (target.x-root0.x)*f;
+            chain[i].y = root0.y + (target.y-root0.y)*f;
+          }
+          return;
+        }
+        for(let iter=0;iter<maxIter;iter++){
+          /* forward */
+          chain[n-1].x = target.x; chain[n-1].y = target.y;
+          for(let i=n-2;i>=0;i--){
+            const d = dist(chain[i],chain[i+1]);
+            const λ = lens[i]/d;
+            chain[i].x = (1-λ)*chain[i+1].x + λ*chain[i].x;
+            chain[i].y = (1-λ)*chain[i+1].y + λ*chain[i].y;
+          }
+          /* backward */
+          chain[0].x = root0.x; chain[0].y = root0.y;
+          for(let i=0;i<n-1;i++){
+            const d = dist(chain[i],chain[i+1]);
+            const λ = lens[i]/d;
+            chain[i+1].x = (1-λ)*chain[i].x + λ*chain[i+1].x;
+            chain[i+1].y = (1-λ)*chain[i].y + λ*chain[i+1].y;
+          }
+          if (dist(chain[n-1],target) < tol) break;
+        }
+      }
+
+      function solveIK(){
+        fabrik(leftChain,  leftLens,  {x:points[4].x,y:points[4].y});
+        fabrik(rightChain, rightLens, {x:points[8].x,y:points[8].y});
+      }
+
+      /* ---------- MAIN PATH RECOMPUTE ---------- */
+      function updatePath(){
+        solveIK();
+        circles.attr("cx",d=>d.x).attr("cy",d=>d.y);   // refresh joint visuals
+
+        /* Catmull–Rom → cubic Bézier (unchanged math) */
+        const tangents = points.map((p,i)=>{
+          if(i===0)          return sub(points[1],points[0]);
+          if(i===points.length-1) return sub(points[i],points[i-1]);
+          return scl(sub(points[i+1],points[i-1]),.5);
+        });
+        let d=`M ${points[0].x} ${points[0].y} `;
+        for(let i=0;i<points.length-1;i++){
+          const cp1 = add(points[i],   scl(tangents[i],   1/3));
+          const cp2 = sub(points[i+1], scl(tangents[i+1], 1/3));
+          d += `C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${points[i+1].x} ${points[i+1].y} `;
+        }
+        mainPath.attr("d",d);
+        updateHUD();
+      }
+
+      /* ---------- CONTROL CIRCLES ---------- */
+      const circles = svg.selectAll("circle.control")
+                         .data(points,d=>d.id)
+                         .enter().append("circle")
+                         .attr("class",d=>"control "+d.id)
+                         .attr("r",circleRadius)
+                         .attr("fill","rgba(0,0,0,0)")
+                         .attr("stroke-dasharray","4,2")
+                         .attr("stroke",d=>{
+                           if(d.type==="center")   return"black";
+                           if(d.type==="endpoint") return d.id==="start"?"green":"red";
+                           return"blue";
+                         });
+
+      /* ----- Drag behaviour (only start & end) ----- */
+      circles.filter(d=>d.draggable)
+             .call(d3.drag()
+               .on("start",function(){d3.select(this).attr("stroke-dasharray",null);})
+               .on("drag",function(ev,d){
+                 const nx = cx + Math.round((ev.x-cx)/halfSpacing)*halfSpacing,
+                       ny = cy + Math.round((ev.y-cy)/halfSpacing)*halfSpacing,
+                       snap = Math.hypot(ev.x-nx,ev.y-ny) < snapThreshold;
+                 d.x = snap ? nx : ev.x;  d.y = snap ? ny : ev.y;
+                 d3.select(this).attr("cx",d.x).attr("cy",d.y);
+                 updatePath();
+               })
+               .on("end",function(ev,d){
+                 d.xFactor = (d.x-cx)/gridSpacing;
+                 d.yFactor = (d.y-cy)/gridSpacing;
+                 d3.select(this).attr("stroke-dasharray","4,2");
+                 updatePath();
+               }));
+
+      /* ---------- HELPERS ---------- */
+      const distance = (a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+      function recomputeSegmentLengths(){
+        leftLens  = [distance(points[0],points[1]),
+                     distance(points[1],points[2]),
+                     distance(points[2],points[3]),
+                     distance(points[3],points[4])];
+        rightLens = [distance(points[4],points[5]),
+                     distance(points[5],points[6]),
+                     distance(points[6],points[7]),
+                     distance(points[7],points[8])];
+      }
+
+      /* ---------- RESIZE ---------- */
+      function resize(){
+        width  = window.innerWidth;
+        height = window.innerHeight;
+        cx = width/2; cy = height/2;
+        gridSpacing = (cx - basePadding)/4;
+        halfSpacing = gridSpacing/2;
+
+        svg.attr("width",width).attr("height",height);
+        drawGrid();
+
+        points.forEach(p=>{
+          p.x = cx + p.xFactor*gridSpacing;
+          p.y = cy + p.yFactor*gridSpacing;
+        });
+        circles.attr("cx",d=>d.x).attr("cy",d=>d.y);
+        recomputeSegmentLengths();
+        updatePath();
+      }
+      window.addEventListener("resize",resize);
+      resize();   // initial layout
+    })();
+  </script>
+</body>
+</html>
