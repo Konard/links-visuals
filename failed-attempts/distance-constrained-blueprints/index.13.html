@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Link blueprint</title>
+
+  <!--
+  REQUIREMENTS / BEHAVIOUR SPEC — LINK BLUEPRINT
+  -------------------------------------------------------------------------------
+  • Interactive demo of a link that can loop back on itself.  It has a SOURCE
+    (“start”) and TARGET (“end”) plus intermediate control points.  The spline
+    is C¹-continuous (Catmull–Rom → Bézier).
+  • The page fills the viewport (pastel-blue #E0F7FA) with one SVG.
+
+  FLEXIBLE, NON-COMPRESSIBLE ENDPOINT DRAG
+  • Dragging **start** or **end** keeps every individual segment between that
+    endpoint and the fixed “center” at its original length (may stretch if
+    pulled farther than the initial reach).
+
+  “SNAKE-BEND” CONSTRAINT
+  • While an endpoint is being dragged, each interior joint obeys a maximum
+    turn of 30 °.  The half-link bends smoothly like a snake.
+  ----------------------------------------------------------------------------- -->
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #E0F7FA;
+      height: 100%;
+      overflow: hidden;
+    }
+    svg { display: block; }
+    #coordinates {
+      position: fixed;
+      bottom: 10px;
+      left: 10px;
+      background: rgba(0, 0, 128, 0.5);
+      color: #fff;
+      padding: 10px;
+      font: 12px/1.2 "Consolas", "Courier New", monospace;
+      border-radius: 5px;
+      white-space: pre;
+    }
+  </style>
+</head>
+<body>
+  <div id="coordinates"></div>
+  <script type="module">
+    const { use } = await import("https://esm.sh/use-m");
+    (async () => {
+      const d3 = await use("d3");
+
+      /* ────────── constants & globals ────────── */
+      const basePadding   = 155;
+      const snapThreshold = 20;
+      const circleRadius  = 24;
+      const centerIndex   = 4;
+      let   dragConstraint = null;
+
+      const maxJointAngleDeg = 30;
+      const maxJointAngleRad = maxJointAngleDeg * Math.PI / 180;
+
+      let width, height, cx, cy, gridSpacing, halfSpacing;
+
+      /* ────────── SVG containers ────────── */
+      const svg       = d3.select("body").append("svg");
+      const gridGroup = svg.insert("g", ":first-child");
+
+      /* ────────── control points ────────── */
+      const points = [
+        { id: "start",  initialFactor: -4, xFactor: -4, yFactor: 0, type: "endpoint",    draggable: true,  z: 1 },
+        { id: "p1",     initialFactor: -3, xFactor: -3, yFactor: 0, type: "intermediate", draggable: true,  z: 2 },
+        { id: "p2",     initialFactor: -2, xFactor: -2, yFactor: 0, type: "intermediate", draggable: true,  z: 3 },
+        { id: "p3",     initialFactor: -1, xFactor: -1, yFactor: 0, type: "intermediate", draggable: true,  z: 4 },
+        { id: "center", initialFactor:  0, xFactor:  0, yFactor: 0, type: "center",       draggable: false, z: 0 },
+        { id: "p4",     initialFactor:  1, xFactor:  1, yFactor: 0, type: "intermediate", draggable: true,  z: 5 },
+        { id: "p5",     initialFactor:  2, xFactor:  2, yFactor: 0, type: "intermediate", draggable: true,  z: 6 },
+        { id: "p6",     initialFactor:  3, xFactor:  3, yFactor: 0, type: "intermediate", draggable: true,  z: 7 },
+        { id: "end",    initialFactor:  4, xFactor:  4, yFactor: 0, type: "endpoint",     draggable: true,  z: 8 }
+      ];
+
+      /* ────────── utility fns ────────── */
+      const dist  = (a, b)   => Math.hypot(a.x - b.x, a.y - b.y);
+      const add   = (v, w)   => ({ x: v.x + w.x, y: v.y + w.y });
+      const sub   = (v, w)   => ({ x: v.x - w.x, y: v.y - w.y });
+      const scale = (v, s)   => ({ x: v.x * s,   y: v.y * s   });
+
+      /* ────────── grid drawing ────────── */
+      function drawGrid() {
+        gridGroup.selectAll("*").remove();
+
+        const minor = gridGroup.append("g").attr("class", "minor");
+        const major = gridGroup.append("g").attr("class", "major");
+
+        const startXmin = cx + Math.floor((0 - cx) / halfSpacing) * halfSpacing;
+        const endXmin   = cx + Math.ceil ((width - cx) / halfSpacing) * halfSpacing;
+        for (let x = startXmin; x <= endXmin; x += halfSpacing) {
+          const target = Math.abs((x - cx) % gridSpacing) < 0.1 ? major : minor;
+          target.append("line")
+                .attr("x1", x).attr("y1", 0)
+                .attr("x2", x).attr("y2", height)
+                .attr("stroke", "white")
+                .attr("stroke-width", target === major ? 1 : 0.5)
+                .attr("opacity", target === major ? 0.8 : 0.5);
+        }
+        const startYmin = cy + Math.floor((0 - cy) / halfSpacing) * halfSpacing;
+        const endYmin   = cy + Math.ceil ((height - cy) / halfSpacing) * halfSpacing;
+        for (let y = startYmin; y <= endYmin; y += halfSpacing) {
+          const target = Math.abs((y - cy) % gridSpacing) < 0.1 ? major : minor;
+          target.append("line")
+                .attr("x1", 0).attr("y1", y)
+                .attr("x2", width).attr("y2", y)
+                .attr("stroke", "white")
+                .attr("stroke-width", target === major ? 1 : 0.5)
+                .attr("opacity", target === major ? 0.8 : 0.5);
+        }
+      }
+
+      /* ────────── HUD update ────────── */
+      function pad(n, w = 4) { return (n >= 0 ? "" : "-") + Math.abs(n).toString().padStart(w - (n >= 0 ? 0 : 1), "0"); }
+      function updateHUD() {
+        document.getElementById("coordinates").textContent = points.map(p =>
+          `${p.id.padEnd(6)}: (${pad(Math.round(p.x))}, ${pad(Math.round(p.y))})  z=${String(p.z).padStart(4, "0")}`
+        ).join("\n");
+      }
+
+      /* ────────── markers ────────── */
+      const defs = svg.append("defs");
+      defs.append("marker")
+          .attr("id", "cross-marker").attr("viewBox", "0 0 100 100")
+          .attr("markerWidth", 100).attr("markerHeight", 100)
+          .attr("refX", 50).attr("refY", 50).attr("orient", "auto")
+        .append("line")
+          .attr("x1", 62.5 - (12.5 - 12.5 / 1.618))
+          .attr("y1", 25 + 14.5 - 0.23)
+          .attr("x2", 62.5 - (12.5 - 12.5 / 1.618))
+          .attr("y2", 75 - 14.5 + 0.23)
+          .attr("stroke", "black");
+      defs.append("marker")
+          .attr("id", "arrow-marker").attr("viewBox", "0 0 100 100")
+          .attr("markerWidth", 100).attr("markerHeight", 100)
+          .attr("refX", 10).attr("refY", 50).attr("orient", "auto")
+        .append("g")
+          .call(g => {
+            g.append("line").attr("x1", 10.35).attr("y1", 50.35).attr("x2", -0.35).attr("y2", 40 - 0.35).attr("stroke", "black");
+            g.append("line").attr("x1", 10.35).attr("y1", 49.65).attr("x2", -0.35).attr("y2", 60 + 0.35).attr("stroke", "black");
+          });
+
+      /* ────────── main SVG path ────────── */
+      const mainPath = svg.append("path")
+                          .attr("fill", "none")
+                          .attr("stroke", "black")
+                          .attr("stroke-width", 12)
+                          .attr("marker-start", "url(#cross-marker)")
+                          .attr("marker-end", "url(#arrow-marker)");
+
+      function updatePath() {
+        const tangents = points.map((p, i) => {
+          if (i === 0) return sub(points[1], points[0]);
+          if (i === points.length - 1) return sub(points[i], points[i - 1]);
+          return scale(sub(points[i + 1], points[i - 1]), 0.5);
+        });
+
+        let d = `M ${points[0].x} ${points[0].y} `;
+        for (let i = 0; i < points.length - 1; i++) {
+          const cp1 = add(points[i], scale(tangents[i], 1 / 3));
+          const cp2 = sub(points[i + 1], scale(tangents[i + 1], 1 / 3));
+          d += `C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${points[i + 1].x} ${points[i + 1].y} `;
+        }
+        mainPath.attr("d", d);
+        updateHUD();
+      }
+
+      /* ────────── FABRIK with angle clamp ────────── */
+      function solveIK(chainIdxs, lengths, startPos, endPos, iterations = 12) {
+        const n = chainIdxs.length;
+        const p = chainIdxs.map(i => ({ x: points[i].x, y: points[i].y }));
+        p[0]     = { ...startPos };
+        p[n - 1] = { ...endPos };
+
+        for (let iter = 0; iter < iterations; iter++) {
+          /* forward */
+          p[0] = { ...startPos };
+          for (let i = 1; i < n; i++) {
+            const d = dist(p[i], p[i - 1]) || 1e-9;
+            const r = lengths[i - 1] / d;
+            p[i].x = p[i - 1].x + (p[i].x - p[i - 1].x) * r;
+            p[i].y = p[i - 1].y + (p[i].y - p[i - 1].y) * r;
+          }
+
+          /* backward */
+          p[n - 1] = { ...endPos };
+          for (let i = n - 2; i >= 0; i--) {
+            const d = dist(p[i], p[i + 1]) || 1e-9;
+            const r = lengths[i] / d;
+            p[i].x = p[i + 1].x + (p[i].x - p[i + 1].x) * r;
+            p[i].y = p[i + 1].y + (p[i].y - p[i + 1].y) * r;
+          }
+
+          /* angle clamp */
+          for (let j = 1; j < n - 1; j++) {
+            if (j + 1 === n - 1) continue;           /* centre stays fixed */
+
+            const prev = p[j - 1], cur = p[j], next = p[j + 1];
+            const vPrev = sub(prev, cur);
+            const vNext = sub(next, cur);
+            const lenPrev = dist(prev, cur) || 1e-9;
+            const lenNext = dist(next, cur) || 1e-9;
+
+            let cos = (vPrev.x * vNext.x + vPrev.y * vNext.y) / (lenPrev * lenNext);
+            cos = Math.max(-1, Math.min(1, cos));
+            const ang = Math.acos(cos);
+
+            if (ang > maxJointAngleRad) {
+              const excess = ang - maxJointAngleRad;
+              const cross  = vPrev.x * vNext.y - vPrev.y * vNext.x;
+              const sign   = cross > 0 ? -1 : 1;
+              const s = Math.sin(excess) * sign;
+              const c = Math.cos(excess);
+
+              /* ★ FIX – rotate the entire tail (j+1 … end) around ‘cur’ */
+              for (let k = j + 1; k < n; k++) {
+                const dx = p[k].x - cur.x;
+                const dy = p[k].y - cur.y;
+                p[k].x = cur.x + c * dx - s * dy;
+                p[k].y = cur.y + s * dx + c * dy;
+              }
+            }
+          }
+        }
+
+        /* write back */
+        chainIdxs.forEach((idx, i) => { points[idx].x = p[i].x; points[idx].y = p[i].y; });
+      }
+
+      /* ────────── circles & drag behaviour ────────── */
+      const circles = svg.selectAll("circle.control")
+                         .data(points, d => d.id)
+                         .enter().append("circle")
+                         .attr("class", d => "control " + d.id)
+                         .attr("r", circleRadius)
+                         .attr("fill", "rgba(0,0,0,0)")
+                         .attr("stroke-dasharray", "4 2")
+                         .attr("stroke", d => {
+                           if (d.type === "center")   return "black";
+                           if (d.type === "endpoint") return d.id === "start" ? "green" : "red";
+                           return "blue";
+                         });
+
+      circles.filter(d => d.draggable)
+             .call(d3.drag()
+               .on("start", function (event, d) {
+                 d3.select(this).attr("stroke-dasharray", null);
+
+                 if (d.type === "endpoint") {
+                   const toCenter = d.id === "start"
+                     ? [...Array(centerIndex + 1).keys()]               // 0→4
+                     : [...Array(points.length - centerIndex).keys()]   // 8→4
+                         .map(i => points.length - 1 - i);
+
+                   const lens = toCenter.slice(0, -1)
+                     .map((_, i) => dist(points[toCenter[i]], points[toCenter[i + 1]]));
+
+                   dragConstraint = { chainIdxs: toCenter, lengths: lens };
+                 } else {
+                   dragConstraint = null;
+                 }
+               })
+               .on("drag", function (event, d) {
+                 if (d.type === "endpoint" && dragConstraint) {
+                   /* snap first */
+                   let px = event.x, py = event.y;
+                   const sx = cx + Math.round((px - cx) / halfSpacing) * halfSpacing;
+                   const sy = cy + Math.round((py - cy) / halfSpacing) * halfSpacing;
+                   if (dist({ x: px, y: py }, { x: sx, y: sy }) < snapThreshold) {
+                     px = sx; py = sy;
+                   }
+
+                   /* clamp reach */
+                   const pCenter = points[centerIndex];
+                   const maxReach = dragConstraint.lengths.reduce((a, b) => a + b, 0);
+                   const dc = dist({ x: px, y: py }, pCenter);
+                   if (dc > maxReach) {
+                     const f = maxReach / dc;
+                     px = pCenter.x + (px - pCenter.x) * f;
+                     py = pCenter.y + (py - pCenter.y) * f;
+                   }
+
+                   d.x = px; d.y = py;
+                   solveIK(dragConstraint.chainIdxs, dragConstraint.lengths,
+                           { x: px, y: py }, { x: pCenter.x, y: pCenter.y });
+
+                   circles.data(points).attr("cx", p => p.x).attr("cy", p => p.y);
+                   updatePath();
+                   return;  /* skip non-IK branch */
+                 }
+
+                 /* regular draggable point */
+                 const nx = cx + Math.round((event.x - cx) / halfSpacing) * halfSpacing;
+                 const ny = cy + Math.round((event.y - cy) / halfSpacing) * halfSpacing;
+                 if (dist({ x: event.x, y: event.y }, { x: nx, y: ny }) < snapThreshold) {
+                   d.x = nx; d.y = ny;
+                 } else {
+                   d.x = event.x; d.y = event.y;
+                 }
+                 d3.select(this).attr("cx", d.x).attr("cy", d.y);
+                 updatePath();
+               })
+               .on("end", function (event, d) {
+                 if (d.type === "endpoint" && dragConstraint) {
+                   dragConstraint.chainIdxs.forEach(idx => {
+                     if (idx === centerIndex) return;       /* centre factors stay */
+                     const p = points[idx];
+                     p.xFactor = (p.x - cx) / gridSpacing;
+                     p.yFactor = (p.y - cy) / gridSpacing;
+                   });
+                   dragConstraint = null;
+                 } else {
+                   d.xFactor = (d.x - cx) / gridSpacing;
+                   d.yFactor = (d.y - cy) / gridSpacing;
+                 }
+                 d3.select(this).attr("stroke-dasharray", "4 2");
+                 updatePath();
+               }));
+
+      /* ────────── resize handler ────────── */
+      function resize() {
+        width  = innerWidth;
+        height = innerHeight;
+        cx = width / 2;
+        cy = height / 2;
+        gridSpacing = (cx - basePadding) / 4;
+        halfSpacing = gridSpacing / 2;
+
+        svg.attr("width", width).attr("height", height);
+        drawGrid();
+
+        points.forEach(p => {
+          p.x = cx + p.xFactor * gridSpacing;
+          p.y = cy + p.yFactor * gridSpacing;
+        });
+
+        circles.data(points).attr("cx", p => p.x).attr("cy", p => p.y);
+        updatePath();
+      }
+      addEventListener("resize", resize);
+      resize();
+    })();
+  </script>
+</body>
+</html>
